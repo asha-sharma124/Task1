@@ -385,16 +385,10 @@ jobs:
         run: |
           echo "Configuring traffic split..."
           
-          RULE_ARN=$(aws elbv2 describe-rules \
+          # Use modify-listener instead of modify-rule
+          aws elbv2 modify-listener \
             --listener-arn ${{ env.ALB_LISTENER_ARN }} \
-            --query 'Rules[?IsDefault==`true`].RuleArn' \
-            --output text)
-          
-          echo "Listener Rule ARN: $RULE_ARN"
-          
-          aws elbv2 modify-rule \
-            --rule-arn "$RULE_ARN" \
-            --actions Type=forward,ForwardConfig="{
+            --default-actions Type=forward,ForwardConfig="{
               TargetGroups=[
                 {TargetGroupArn=${{ env.BLUE_TG_ARN }},Weight=80},
                 {TargetGroupArn=${{ env.GREEN_TG_ARN }},Weight=20}
