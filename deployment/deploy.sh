@@ -58,8 +58,13 @@ if [ ! -L /etc/nginx/sites-enabled/quotes-app ]; then
     sudo nginx -t
 fi
 
-echo "Pulling Docker images..."
-docker-compose pull
+echo "Pulling Docker images (this may take 5-10 minutes)..."
+echo "Started at: $(date)"
+
+# Pull with minimal output
+docker-compose pull 2>&1 | grep -E "Pulling|Downloaded|Status:" || true
+
+echo "Images pulled at: $(date)"
 
 echo "Starting Docker containers..."
 docker-compose up -d
@@ -93,8 +98,7 @@ if [ $RUNNING -eq $EXPECTED ]; then
     curl -s http://localhost/health && echo " ✅ Health check passed"
     
     echo ""
-    echo "Deployment Info:"
-    curl -s http://localhost/deployment-info 2>/dev/null || echo "Deployment info endpoint not ready"
+    echo "Deployment completed at: $(date)"
     echo ""
     
     exit 0
