@@ -632,7 +632,7 @@
 #   #         echo ""
 #   #         echo "🎉 Blue-Green deployment successful!"
 
-  name: Single Instance Blue-Green Deployment
+name: Single Instance Blue-Green Deployment
 
 on:
   push:
