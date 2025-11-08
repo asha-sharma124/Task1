@@ -1641,6 +1641,7 @@ jobs:
             REASON=$(echo "$HEALTH_INFO" | jq -r '.TargetHealthDescriptions[0].TargetHealth.Reason // "none"')
             DESCRIPTION=$(echo "$HEALTH_INFO" | jq -r '.TargetHealthDescriptions[0].TargetHealth.Description // ""')
 
+
             # Only log if state changed
             if [ "$STATE" != "$LAST_STATE" ] || [ "$REASON" != "$LAST_REASON" ]; then
               echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
