@@ -632,6 +632,12 @@
 #   #         echo ""
 #   #         echo "🎉 Blue-Green deployment successful!"
 
+
+
+
+
+
+
 name: Single Instance Blue-Green Deployment
 
 on:
@@ -822,12 +828,12 @@ jobs:
               "",
               "echo \"Downloading files from S3...\"",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/docker-compose.yml .",
-              "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.tag }}/nginx-config/ ./nginx-config/ --recursive",
-              "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.tag }}/deployment/ ./deployment/ --recursive",
+              "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/nginx-config/ ./nginx-config/ --recursive",
+              "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/deployment/ ./deployment/ --recursive",
               "",
               "chmod +x deployment/*.sh",
               "echo \"Files downloaded:\"",
-              "ls -la",
+              "ls -la deployment",
               "",
               "echo \"Starting deployment script...\"",
               "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green",
@@ -955,7 +961,6 @@ jobs:
           echo "❌ Health check timeout"
           exit 1
 
-
   register-green:
     name: Register Green and Wait for Healthy Status
     needs: [provision-green, health-check]
@@ -1072,7 +1077,6 @@ jobs:
             --target-group-arn ${{ env.GREEN_TG_ARN }} \
             --targets Id=${{ needs.provision-green.outputs.green_instance_id }} | jq '.'
           exit 1
-
 
   configure-canary:
     name: Configure 20% Canary Traffic
@@ -1260,5 +1264,3 @@ jobs:
           echo "   • Green TG → New version (canary testing)"
           echo ""
           echo "🎉 Blue-Green deployment successful!"
-
-
