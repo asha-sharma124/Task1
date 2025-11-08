@@ -420,7 +420,7 @@ jobs:
           echo "   - Green: 1 instance (20% traffic)"
           echo ""
           echo "✅ Click 'Approve and run' to complete deployment (100% → Green)"
-
+          
   complete-deployment:
     name: Complete Blue-Green Switch
     needs: [provision-green, approve]
@@ -437,15 +437,12 @@ jobs:
       - name: Shift 100% traffic to green
         run: |
           echo "Shifting 100% traffic to green..."
+          echo "Listener ARN: ${{ env.ALB_LISTENER_ARN }}"
           
-          RULE_ARN=$(aws elbv2 describe-rules \
+          # Use modify-listener, not modify-rule
+          aws elbv2 modify-listener \
             --listener-arn ${{ env.ALB_LISTENER_ARN }} \
-            --query 'Rules[?IsDefault==`true`].RuleArn' \
-            --output text)
-          
-          aws elbv2 modify-rule \
-            --rule-arn "$RULE_ARN" \
-            --actions Type=forward,TargetGroupArn=${{ env.GREEN_TG_ARN }}
+            --default-actions Type=forward,TargetGroupArn=${{ env.GREEN_TG_ARN }}
           
           echo "✅ 100% traffic now routed to green instance"
       
@@ -462,7 +459,7 @@ jobs:
           echo "blue_id=$BLUE_ID" >> $GITHUB_OUTPUT
           
           if [ -z "$BLUE_ID" ] || [ "$BLUE_ID" = "None" ]; then
-            echo "ℹ️  No blue instance found (first deployment)"
+            echo "ℹ️  No blue instance found (this might be the first deployment)"
           else
             echo "Blue instance to cleanup: $BLUE_ID"
           fi
@@ -470,7 +467,7 @@ jobs:
       - name: Deregister and terminate blue instance
         if: steps.blue.outputs.blue_id != '' && steps.blue.outputs.blue_id != 'None'
         run: |
-          echo "Deregistering blue instance..."
+          echo "Deregistering blue instance from target group..."
           
           aws elbv2 deregister-targets \
             --target-group-arn ${{ env.BLUE_TG_ARN }} \
@@ -498,5 +495,10 @@ jobs:
           echo "========================================"
           echo "✅ DEPLOYMENT COMPLETE!"
           echo "========================================"
+          echo ""
+          echo "Summary:"
+          echo "  - New instance promoted to blue"
+          echo "  - Old blue instance terminated"
+          echo "  - 100% traffic on new version"
           echo ""
           echo "🎉 Blue-Green deployment successful!"
