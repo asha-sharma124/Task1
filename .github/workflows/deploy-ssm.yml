@@ -168,6 +168,7 @@ jobs:
             sleep 15
           done
           exit 1
+          
 
   health-check:
     name: Health Check
