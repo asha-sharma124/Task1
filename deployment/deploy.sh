@@ -113,7 +113,7 @@
 # # fi
 
 
-# #!/bin/bash
+# ##!/bin/bash
 # set -e
 
 # DOCKER_USERNAME=$1
@@ -211,7 +211,7 @@ echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 echo "Stopping containers gracefully..."
 docker-compose down --timeout 30 2>/dev/null || true
 
-echo "Cleaning up unused containers and images..."
+echo "Cleaning up resources..."
 docker container prune -f || true
 docker image prune -af --filter "until=24h" || true
 
@@ -222,7 +222,7 @@ DEPLOYMENT_ENV=${DEPLOYMENT_ENV}
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
-echo "Pulling updated Docker images..."
+echo "Pulling images..."
 docker-compose pull -q
 
 echo "Starting containers..."
@@ -231,6 +231,7 @@ docker-compose up -d
 echo "Waiting for services to be ready..."
 sleep 20
 
+# API health check wait
 for i in {1..30}; do
     if curl -sf http://localhost:5001/health > /dev/null 2>&1; then
         echo "API ready"
@@ -240,6 +241,7 @@ for i in {1..30}; do
     sleep 2
 done
 
+# Frontend health check wait
 for i in {1..30}; do
     if curl -sf http://localhost:5002/ > /dev/null 2>&1; then
         echo "Frontend ready"
@@ -249,6 +251,7 @@ for i in {1..30}; do
     sleep 2
 done
 
+# Update nginx with cache busting headers
 cat > $APP_DIR/nginx-deployment.conf << EOF
 add_header X-Deployment-Environment "${DEPLOYMENT_ENV}" always;
 add_header X-App-Version "${IMAGE_TAG}" always;
