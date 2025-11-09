@@ -26,8 +26,10 @@ jobs:
       - name: Set image tag
         id: set_tag
         run: |
-          echo "image_tag=latest" >> $GITHUB_OUTPUT
-          echo "TAG=latest" >> $GITHUB_ENV
+          TAG=$(date +'%Y%m%d%H%M%S')
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -58,7 +60,6 @@ jobs:
           sed -i "s|build: ./app|image: ${{ secrets.DOCKER_USERNAME }}/quotes-frontend:${TAG}|g" docker-compose.yml
 
           aws s3 cp docker-compose.yml s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/
-          aws s3 cp nginx-config/ s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/nginx-config/ --recursive
           aws s3 cp deployment/ s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/deployment/ --recursive
 
           echo "✅ Deployment files uploaded to S3"
@@ -80,41 +81,25 @@ jobs:
         id: launch
         run: |
           echo "Launching new green instance..."
-          INSTANCE_ID=$(aws ec2 run-instances \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }} \
-            --count 1 \
+          INSTANCE_ID=$(aws ec2 run-instances  --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }} -count 1 
             --subnet-id ${{ env.PRIVATE_SUBNET_ID }} \
             --tag-specifications "ResourceType=instance,Tags=[
-              {Key=Environment,Value=green},
-              {Key=Version,Value=${{ needs.build.outputs.image_tag }}},
               {Key=Name,Value=quotes-app-green}
-            ]" \
-            --query 'Instances[0].InstanceId' \
+            ]"  --query 'Instances[0].InstanceId' \
             --output text)
           
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "✅ Launched green instance: $INSTANCE_ID"
+          echo "Launched green instance"
 
-      - name: Wait for instance to be ready
+      - name: Wait for green instance to be ready
         run: |
           echo "Waiting for instance to be running..."
           aws ec2 wait instance-running --instance-ids ${{ steps.launch.outputs.instance_id }}
 
           echo "Instance is running. Waiting for initialization to complete..."
-          sleep 150
+          sleep 180
 
-          echo "Checking SSM agent status..."
-          for i in {1..30}; do
-            STATUS=$(aws ssm describe-instance-information \
-              --instance-information-filter-list "key=InstanceIds,valueSet=${{ steps.launch.outputs.instance_id }}" \
-              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || echo "Offline")
-            echo "Attempt $i/30 - SSM Agent Status: $STATUS"
-            if [ "$STATUS" = "Online" ]; then
-              echo "✅ SSM agent is online and ready"
-              exit 0
-            fi
-            sleep 10
-          done
+
 
           echo "⚠️ SSM agent status check timed out, but continuing..."
 

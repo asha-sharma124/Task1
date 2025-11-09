@@ -13,6 +13,15 @@ api.config["MYSQL_DB"] = os.getenv("MYSQL_DB", "quotesdb")
 mysql = MySQL(api)
 
 
+@api.after_request
+def add_custom_headers(response):
+    response.headers['X-Deployment-Environment'] = os.getenv('DEPLOYMENT_ENV', 'unknown')
+    response.headers['X-App-Version'] = os.getenv('IMAGE_TAG', 'unknown')
+    response.headers['X-Hostname'] = os.uname().nodename
+    return response
+
+
+
 @api.route("/api/quotes", methods=["GET"])
 def get_quotes():
     cursor = mysql.connection.cursor()
