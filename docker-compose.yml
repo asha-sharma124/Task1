@@ -28,7 +28,7 @@ services:
       - api
     # Changed to map to port 80, which is what the EB load balancer will expect for HTTP traffic
     ports:
-      - 80:5002  # Assuming your app.py is set to listen on port 5002
+      - 5002:5002  # Assuming your app.py is set to listen on port 5002
 
 # Removed volumes section
 
