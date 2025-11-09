@@ -275,4 +275,5 @@ if [ ! -L /etc/nginx/sites-enabled/quotes-app ]; then
 fi
 
 echo "Reloading nginx..."
-sudo nginx -t && sudo systemctl reload nginx
+sudo nginx -t && sudo systemctl start nginx
+sudo systemctl reload nginx
