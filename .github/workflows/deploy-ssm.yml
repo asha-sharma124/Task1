@@ -117,6 +117,10 @@ jobs:
 
       - name: Deploy via SSM
         run: |
+          echo "=== Deploying to green instance ==="
+          echo "Instance ID: ${{ needs.provision-green.outputs.green_instance_id }}"
+          echo "Image Tag: ${{ needs.build.outputs.image_tag }}"
+
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ needs.provision-green.outputs.green_instance_id }}" \
             --document-name "AWS-RunShellScript" \
@@ -125,28 +129,82 @@ jobs:
             --parameters 'commands=[
               "#!/bin/bash",
               "set -ex",
+              "echo \"=== Deployment Started at $(date) ===\"",
               "sudo mkdir -p /home/ubuntu/quotes-app/deployment /home/ubuntu/quotes-app/nginx-config",
               "sudo chown -R ubuntu:ubuntu /home/ubuntu/quotes-app",
               "cd /home/ubuntu/quotes-app",
+              "pwd",
+              "echo \"AWS CLI: $(aws --version)\"",
+              "echo \"Docker: $(docker --version)\"",
+              "echo \"Docker Compose: $(docker-compose --version)\"",
+              "",
+              "echo \"Downloading files from S3...\"",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/docker-compose.yml .",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/nginx-config/ ./nginx-config/ --recursive",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/deployment/ ./deployment/ --recursive",
+              "",
               "chmod +x deployment/*.sh",
-              "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green"
+              "echo \"Files downloaded:\"",
+              "ls -la deployment",
+              "",
+              "echo \"Starting deployment script...\"",
+              "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green",
+              "",
+              "echo \"=== Deployment Finished at $(date) ===\""
             ]' \
-            --query 'Command.CommandId' --output text)
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "Command ID: $COMMAND_ID"
+          echo "Polling deployment status (max 15 minutes)..."
 
           MAX_ATTEMPTS=120
           ATTEMPT=0
+
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
-            RESULT=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "${{ needs.provision-green.outputs.green_instance_id }}" --region ${{ env.AWS_REGION }} 2>/dev/null || echo '{"Status":"Pending"}')
+
+            RESULT=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ needs.provision-green.outputs.green_instance_id }}" \
+              --region ${{ env.AWS_REGION }} 2>/dev/null || echo '{"Status":"Pending"}')
+
             STATUS=$(echo "$RESULT" | jq -r '.Status')
-            if [ "$STATUS" = "Success" ]; then exit 0; fi
-            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then exit 1; fi
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - Status: $STATUS - Time: $(date +%H:%M:%S)"
+
+            if [ "$STATUS" = "Success" ]; then
+              echo ""
+              echo "✅ Deployment successful!"
+              echo ""
+              echo "=== Deployment Output ==="
+              echo "$RESULT" | jq -r '.StandardOutputContent'
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo ""
+              echo "❌ Deployment failed with status: $STATUS"
+              echo ""
+              echo "=== Standard Output ==="
+              echo "$RESULT" | jq -r '.StandardOutputContent'
+              echo ""
+              echo "=== Standard Error ==="
+              echo "$RESULT" | jq -r '.StandardErrorContent'
+              exit 1
+            fi
+
             sleep 15
           done
+
+          echo ""
+          echo "❌ Deployment timeout after 15 minutes"
+          RESULT=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ needs.provision-green.outputs.green_instance_id }}" \
+            --region ${{ env.AWS_REGION }})
+          echo "$RESULT" | jq -r '.StandardOutputContent'
           exit 1
+
 
   register-green:
     needs: deploy
