@@ -1,0 +1,428 @@
+name: Progressive Rolling Deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  OLD_TG_ARN: ${{ secrets.BLUE_TARGET_GROUP_ARN }}
+  NEW_TG_ARN: ${{ secrets.GREEN_TARGET_GROUP_ARN }}
+  ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
+  LAUNCH_TEMPLATE_ID: ${{ secrets.LAUNCH_TEMPLATE_ID }}
+  PRIVATE_SUBNET_ID: ${{ secrets.PRIVATE_SUBNET_ID }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.image_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        id: set_tag
+        run: |
+          TAG=$(date +'%Y%m%d%H%M%S')-${GITHUB_SHA::7}
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker images
+        run: |
+          TAG=${{ steps.set_tag.outputs.image_tag }}
+          for service in db api app; do
+            IMAGE_NAME="${{ secrets.DOCKER_USERNAME }}/quotes-${service}"
+            docker build -t $IMAGE_NAME:${TAG} -t $IMAGE_NAME:latest $GITHUB_WORKSPACE/$service
+            docker push $IMAGE_NAME:${TAG}
+            docker push $IMAGE_NAME:latest
+          done
+
+      - name: Configure AWS and upload deployment files
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          TAG=${{ steps.set_tag.outputs.image_tag }}
+          sed -i "s|build: ./db|image: ${{ secrets.DOCKER_USERNAME }}/quotes-db:${TAG}|g" docker-compose.yml
+          sed -i "s|build: ./api|image: ${{ secrets.DOCKER_USERNAME }}/quotes-api:${TAG}|g" docker-compose.yml
+          sed -i "s|build: ./app|image: ${{ secrets.DOCKER_USERNAME }}/quotes-app:${TAG}|g" docker-compose.yml
+          
+          aws s3 cp docker-compose.yml s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/
+          aws s3 cp deployment/ s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/deployment/ --recursive
+          aws s3 cp ./nginx-config/quotes.conf s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/
+
+  create-launch-template:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      template_version: ${{ steps.create.outputs.version }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create launch template version
+        id: create
+        run: |
+          TAG=${{ needs.build.outputs.image_tag }}
+          
+          cat > user-data.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          exec > >(tee /var/log/user-data.log) 2>&1
+          
+          yum update -y
+          yum install -y docker aws-cli
+          systemctl enable docker
+          systemctl start docker
+          
+          curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+          mkdir -p /home/ubuntu/quotes-app/deployment
+          cd /home/ubuntu/quotes-app
+          
+          aws s3 cp s3://BUCKET/deployments/TAG/docker-compose.yml .
+          aws s3 cp s3://BUCKET/deployments/TAG/deployment/ ./deployment/ --recursive
+          aws s3 cp s3://BUCKET/deployments/TAG/quotes.conf .
+          
+          chmod +x deployment/*.sh
+          bash deployment/deploy.sh USER TAG PASS production
+          EOF
+          
+          sed -i "s|BUCKET|${{ secrets.DEPLOYMENT_BUCKET }}|g" user-data.sh
+          sed -i "s|TAG|${TAG}|g" user-data.sh
+          sed -i "s|USER|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
+          sed -i "s|PASS|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
+          
+          USER_DATA_B64=$(base64 -w 0 user-data.sh)
+          
+          VERSION=$(aws ec2 create-launch-template-version \
+            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
+            --source-version '$Latest' \
+            --launch-template-data "{\"UserData\":\"${USER_DATA_B64}\"}" \
+            --version-description "Deploy ${TAG}" \
+            --query 'LaunchTemplateVersion.VersionNumber' \
+            --output text)
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  get-old-instances:
+    needs: create-launch-template
+    runs-on: ubuntu-latest
+    outputs:
+      instance_ids: ${{ steps.get.outputs.ids }}
+      count: ${{ steps.get.outputs.count }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get old instances
+        id: get
+        run: |
+          INSTANCES=$(aws elbv2 describe-target-health \
+            --target-group-arn ${{ env.OLD_TG_ARN }} \
+            --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
+            --output json)
+          
+          echo "ids=$INSTANCES" >> $GITHUB_OUTPUT
+          echo "count=$(echo $INSTANCES | jq '. | length')" >> $GITHUB_OUTPUT
+          echo "Found $(echo $INSTANCES | jq '. | length') instances"
+
+  # STEP 1: Deploy first instance with load splitting
+  deploy-instance-1:
+    needs: [build, create-launch-template]
+    runs-on: ubuntu-latest
+    outputs:
+      instance_id: ${{ steps.deploy.outputs.id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy first instance
+        id: deploy
+        run: |
+          echo "=== Deploying Instance 1 (Canary) ==="
+          
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.create-launch-template.outputs.template_version }} \
+            --subnet-id ${{ env.PRIVATE_SUBNET_ID }} \
+            --tag-specifications "ResourceType=instance,Tags=[
+              {Key=Name,Value=quotes-new-1},
+              {Key=DeploymentTag,Value=${{ needs.build.outputs.image_tag }}},
+              {Key=Environment,Value=production},
+              {Key=DeploymentPhase,Value=canary}
+            ]" \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          
+          echo "id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "✅ Launched: $INSTANCE_ID"
+          
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          sleep 90
+          
+          # Health check
+          HEALTHY=false
+          for i in {1..60}; do
+            CMD=$(aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 || echo 000"]' \
+              --query 'Command.CommandId' \
+              --output text 2>/dev/null) || { sleep 20; continue; }
+            
+            sleep 10
+            
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'StandardOutputContent' \
+              --output text 2>/dev/null | tr -d '\n\r ' || echo "000")
+            
+            if [ "$STATUS" = "200" ]; then
+              HEALTHY=true
+              echo "✅ Health check passed"
+              break
+            fi
+            
+            sleep 20
+          done
+          
+          if [ "$HEALTHY" = false ]; then
+            echo "❌ Health check failed"
+            aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+            exit 1
+          fi
+          
+          # Register to NEW target group
+          aws elbv2 register-targets \
+            --target-group-arn ${{ env.NEW_TG_ARN }} \
+            --targets Id=$INSTANCE_ID
+          
+          sleep 60
+          
+          # Set 80/20 traffic split (80% OLD, 20% NEW)
+          echo "Setting 80/20 traffic split..."
+          aws elbv2 modify-listener \
+            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            --default-actions Type=forward,ForwardConfig="{
+              TargetGroups=[
+                {TargetGroupArn=${{ env.OLD_TG_ARN }},Weight=80},
+                {TargetGroupArn=${{ env.NEW_TG_ARN }},Weight=20}
+              ],
+              TargetGroupStickinessConfig={Enabled=false}
+            }"
+          
+          echo "✅ Instance 1 deployed with canary traffic split"
+
+  # STEP 2: Loop through remaining 3 instances with wait timers
+  deploy-remaining-instances:
+    needs: [deploy-instance-1, get-old-instances, create-launch-template, build]
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1  # Deploy one at a time
+      matrix:
+        instance: [2, 3, 4]
+    environment:
+      name: wait-timer  # 20-minute wait between each instance
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify previous instances are healthy
+        run: |
+          echo "Verifying all deployed instances are healthy..."
+          
+          # Get all instances in NEW target group
+          HEALTH_STATUS=$(aws elbv2 describe-target-health \
+            --target-group-arn ${{ env.NEW_TG_ARN }} \
+            --query 'TargetHealthDescriptions[?TargetHealth.State!=`healthy`]' \
+            --output json)
+          
+          UNHEALTHY_COUNT=$(echo $HEALTH_STATUS | jq '. | length')
+          
+          if [ $UNHEALTHY_COUNT -gt 0 ]; then
+            echo "❌ Found $UNHEALTHY_COUNT unhealthy instances. Aborting."
+            echo "$HEALTH_STATUS"
+            exit 1
+          fi
+          
+          echo "✅ All instances healthy, proceeding..."
+
+      - name: Deploy instance ${{ matrix.instance }}
+        id: deploy
+        run: |
+          INSTANCE_NUM=${{ matrix.instance }}
+          OLD_INDEX=$((INSTANCE_NUM - 2))
+          
+          echo "=== Deploying Instance $INSTANCE_NUM ==="
+          echo "Will replace old instance at index $OLD_INDEX"
+          
+          # Get old instance to replace
+          OLD_INSTANCE=$(echo '${{ needs.get-old-instances.outputs.instance_ids }}' | jq -r ".[$OLD_INDEX]")
+          echo "Old instance to replace: $OLD_INSTANCE"
+          
+          # Launch new instance
+          NEW_INSTANCE=$(aws ec2 run-instances \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.create-launch-template.outputs.template_version }} \
+            --subnet-id ${{ env.PRIVATE_SUBNET_ID }} \
+            --tag-specifications "ResourceType=instance,Tags=[
+              {Key=Name,Value=quotes-new-$INSTANCE_NUM},
+              {Key=DeploymentTag,Value=${{ needs.build.outputs.image_tag }}},
+              {Key=Environment,Value=production},
+              {Key=InstanceNumber,Value=$INSTANCE_NUM}
+            ]" \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          
+          echo "✅ Launched: $NEW_INSTANCE"
+          
+          # Wait for instance to be running
+          aws ec2 wait instance-running --instance-ids $NEW_INSTANCE
+          sleep 90
+          
+          # Health check
+          HEALTHY=false
+          for i in {1..60}; do
+            CMD=$(aws ssm send-command \
+              --instance-ids "$NEW_INSTANCE" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 || echo 000"]' \
+              --query 'Command.CommandId' \
+              --output text 2>/dev/null) || { sleep 20; continue; }
+            
+            sleep 10
+            
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD" \
+              --instance-id "$NEW_INSTANCE" \
+              --query 'StandardOutputContent' \
+              --output text 2>/dev/null | tr -d '\n\r ' || echo "000")
+            
+            if [ "$STATUS" = "200" ]; then
+              HEALTHY=true
+              echo "✅ Health check passed"
+              break
+            fi
+            
+            sleep 20
+          done
+          
+          if [ "$HEALTHY" = false ]; then
+            echo "❌ Health check failed"
+            aws ec2 terminate-instances --instance-ids $NEW_INSTANCE
+            exit 1
+          fi
+          
+          # Register new instance
+          aws elbv2 register-targets \
+            --target-group-arn ${{ env.NEW_TG_ARN }} \
+            --targets Id=$NEW_INSTANCE
+          
+          sleep 30
+          
+          # Deregister and terminate old instance
+          aws elbv2 deregister-targets \
+            --target-group-arn ${{ env.OLD_TG_ARN }} \
+            --targets Id=$OLD_INSTANCE
+          
+          sleep 30
+          
+          aws ec2 terminate-instances --instance-ids $OLD_INSTANCE
+          echo "✅ Terminated old instance: $OLD_INSTANCE"
+          
+          # Calculate and update traffic weights
+          NEW_COUNT=$INSTANCE_NUM
+          OLD_COUNT=$((4 - INSTANCE_NUM))
+          TOTAL=$((NEW_COUNT + OLD_COUNT))
+          
+          if [ $OLD_COUNT -gt 0 ]; then
+            NEW_WEIGHT=$(( (NEW_COUNT * 100) / TOTAL ))
+            OLD_WEIGHT=$((100 - NEW_WEIGHT))
+            
+            echo "Updating traffic: $OLD_WEIGHT% OLD, $NEW_WEIGHT% NEW"
+            
+            aws elbv2 modify-listener \
+              --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+              --default-actions Type=forward,ForwardConfig="{
+                TargetGroups=[
+                  {TargetGroupArn=${{ env.OLD_TG_ARN }},Weight=$OLD_WEIGHT},
+                  {TargetGroupArn=${{ env.NEW_TG_ARN }},Weight=$NEW_WEIGHT}
+                ]
+              }"
+          fi
+          
+          echo "✅ Instance $INSTANCE_NUM deployed successfully"
+
+  finalize:
+    needs: [deploy-remaining-instances, create-launch-template, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Final verification and cutover
+        run: |
+          echo "=== Final Deployment Verification ==="
+          
+          # Verify all 4 instances are healthy
+          HEALTHY_INSTANCES=$(aws elbv2 describe-target-health \
+            --target-group-arn ${{ env.NEW_TG_ARN }} \
+            --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
+            --output json)
+          
+          HEALTHY_COUNT=$(echo $HEALTHY_INSTANCES | jq '. | length')
+          
+          if [ $HEALTHY_COUNT -ne 4 ]; then
+            echo "❌ Expected 4 healthy instances, found $HEALTHY_COUNT"
+            exit 1
+          fi
+          
+          echo "✅ All 4 instances healthy"
+          
+          # Switch to 100% NEW
+          aws elbv2 modify-listener \
+            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            --default-actions Type=forward,TargetGroupArn=${{ env.NEW_TG_ARN }}
+          
+          # Set template version as default
+          aws ec2 modify-launch-template \
+            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
+            --default-version ${{ needs.create-launch-template.outputs.template_version }}
+          
+          echo "=========================================="
+          echo "🎉 DEPLOYMENT COMPLETE!"
+          echo "=========================================="
+          echo "Image Tag: ${{ needs.build.outputs.image_tag }}"
+          echo "Template Version: ${{ needs.create-launch-template.outputs.template_version }}"
+          echo "=========================================="
