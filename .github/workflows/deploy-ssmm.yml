@@ -650,11 +650,7 @@ jobs:
           
           # CHECKPOINT 11: Run deployment
           echo "=== [CHECKPOINT 11/12] Running deployment script at $(date) ==="
-          echo "checkpoint-11-started" > /tmp/checkpoint-11
-          chmod +x deployment/*.sh
-          bash deployment/deploy.sh DOCKER_USER DEPLOYMENT_TAG DOCKER_PASS production || { echo "deploy.sh failed"; exit 1; }
-          echo "checkpoint-11-complete" > /tmp/checkpoint-11
-          
+          docker compose up -d
           # CHECKPOINT 12: Configure Nginx
           echo "=== [CHECKPOINT 12/12] Configuring Nginx at $(date) ==="
           echo "checkpoint-12-started" > /tmp/checkpoint-12
@@ -777,6 +773,7 @@ jobs:
           # Additional wait for SSM agent to be fully ready
           echo "Waiting for SSM agent to be ready..."
           sleep 60
+          sleep 350
           
           # Wait for SSM agent connectivity with retry
           MAX_RETRIES=20
