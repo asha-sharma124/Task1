@@ -223,13 +223,21 @@ jobs:
           
           # Create template
           USER_DATA_B64=$(base64 -w 0 user-data.sh)
+
           VERSION=$(aws ec2 create-launch-template-version \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --source-version '$Latest' \
-            --launch-template-data "{\"UserData\":\"${USER_DATA_B64}\"}" \
+            --launch-template-data "{
+              \"UserData\": \"${USER_DATA_B64}\",
+              \"IamInstanceProfile\": {
+                \"Name\": \"ec2-ssm-role\"
+              }
+            }" \
             --version-description "Deploy ${TAG}" \
             --query 'LaunchTemplateVersion.VersionNumber' \
             --output text)
+
+         
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "✅ Created template version: $VERSION"
