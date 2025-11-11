@@ -22,6 +22,8 @@ services:
       MYSQL_USER: user
       MYSQL_PASSWORD: password
       MYSQL_DB: quotesdb
+      ports:
+      - 5001:5001
     # Removed ports configuration; EB handles port binding
 
   app:

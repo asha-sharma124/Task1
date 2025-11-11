@@ -305,10 +305,113 @@ jobs:
           # Initial wait for SSM
           sleep 120
           
-         
-           
+          # Monitor checkpoints
+          echo "=== Monitoring Installation Progress ==="
+          for i in {1..60}; do
+            echo ""
+            echo "--- Check $i/60 at $(date) ---"
+            
+            # Check checkpoint status
+            CMD=$(aws ssm send-command \
+              --instance-ids "$INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --parameters 'commands=[
+                "echo === CHECKPOINT STATUS ===",
+                "ls -1 /tmp/checkpoint-* 2>/dev/null | wc -l | xargs echo Completed checkpoints:",
+                "echo",
+                "echo === CHECKPOINT DETAILS ===",
+                "for f in /tmp/checkpoint-*; do echo \"$f: $(cat $f 2>/dev/null)\"; done 2>/dev/null || echo No checkpoints yet",
+                "echo",
+                "echo === RECENT LOG (last 15 lines) ===",
+                "tail -15 /var/log/user-data.log 2>/dev/null || echo No log yet",
+                "echo",
+                "echo === PROCESS CHECK ===",
+                "ps aux | grep -E \"apt-get|docker|curl|aws\" | grep -v grep | head -5 || echo No relevant processes"
+              ]' \
+              --query 'Command.CommandId' \
+              --output text 2>/dev/null || echo "")
+            
+            if [ -n "$CMD" ]; then
+              sleep 10
+              
+              OUTPUT=$(aws ssm get-command-invocation \
+                --command-id "$CMD" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardOutputContent' \
+                --output text 2>/dev/null || echo "Cannot fetch yet")
+              
+              echo "$OUTPUT"
+              
+              # Check if complete
+              if echo "$OUTPUT" | grep -q "deployment_complete"; then
+                echo ""
+                echo "✅✅✅ DEPLOYMENT COMPLETE ✅✅✅"
+                break
+              fi
+              
+              # Check checkpoint count
+              CHECKPOINT_COUNT=$(echo "$OUTPUT" | grep "Completed checkpoints:" | grep -oE '[0-9]+' || echo "0")
+              echo "Progress: $CHECKPOINT_COUNT/12 checkpoints"
+            else
+              echo "SSM not ready yet..."
+            fi
+            
+            if [ $i -eq 60 ]; then
+              echo ""
+              echo "❌❌❌ TIMEOUT AFTER 30 MINUTES ❌❌❌"
+              echo "Fetching final logs..."
+              
+              FINAL_CMD=$(aws ssm send-command \
+                --instance-ids "$INSTANCE_ID" \
+                --document-name "AWS-RunShellScript" \
+                --parameters 'commands=["cat /var/log/user-data.log"]' \
+                --query 'Command.CommandId' \
+                --output text)
+              
+              sleep 10
+              
+              aws ssm get-command-invocation \
+                --command-id "$FINAL_CMD" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardOutputContent' \
+                --output text || echo "Cannot fetch logs"
+              
+              aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+              exit 1
+            fi
+            
+            sleep 30
+          done
           
-          sleep 200
+          # Health check
+          echo ""
+          echo "=== Final Health Check ==="
+          sleep 20
+          
+          HEALTH_CMD=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 2>/dev/null || echo 000"]' \
+            --query 'Command.CommandId' \
+            --output text)
+          
+          sleep 15
+          
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$HEALTH_CMD" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' \
+            --output text | tr -cd '0-9' | head -c 3)
+          
+          echo "HTTP Status: ${STATUS:-000}"
+          
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Health check failed"
+            aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+            exit 1
+          fi
+          
+          echo "✅ Health check passed!"
           
           # Register to target group
           aws elbv2 register-targets --target-group-arn ${{ env.NEW_TG_ARN }} --targets Id=$INSTANCE_ID
