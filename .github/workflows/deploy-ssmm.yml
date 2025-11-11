@@ -165,7 +165,7 @@ jobs:
           docker pull DOCKER_USER/quotes-db:latest &
           docker pull DOCKER_USER/quotes-api:latest &
           docker pull DOCKER_USER/quotes-app:latest &
-          wait
+          sleep 15
           docker logout
           docker images
           echo "checkpoint-9-complete" > /tmp/checkpoint-9
