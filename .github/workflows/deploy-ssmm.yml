@@ -87,53 +87,139 @@ jobs:
           echo "=== Starting deployment at $(date) ==="
           
           # Update system
+          #!/bin/bash
+          set -e
+
+          echo "=== Starting Instance Initialization ==="
+          echo "Timestamp: $(date)"
+
+          # Update system
+          echo "Updating system packages..."
           apt-get update -y
-          
-          # Install AWS CLI
-          echo "Installing AWS CLI..."
-          apt-get install -y awscli unzip curl jq
-          
-          # Install SSM Agent
-          echo "Installing SSM Agent..."
-          snap install amazon-ssm-agent --classic
-          systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
-          systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
-          
+
+          # Install required packages
+          echo "Installing required packages..."
+          apt-get install -y \
+              curl \
+              wget \
+              unzip \
+              ca-certificates \
+              gnupg \
+              lsb-release \
+              nginx \
+              jq \
+              git
+
+          # Install AWS CLI v2
+          echo "Installing AWS CLI v2..."
+          cd /tmp
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          ./aws/install
+          rm -rf aws awscliv2.zip
+
+          # Verify AWS CLI
+          echo "AWS CLI installed: $(aws --version)"
+
           # Install Docker
           echo "Installing Docker..."
-          apt-get install -y ca-certificates gnupg lsb-release
-          install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-          chmod a+r /etc/apt/keyrings/docker.gpg
-          
-          echo \
-            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-            $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-          
-          apt-get update -y
-          apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-          
-          systemctl enable docker
+          curl -fsSL https://get.docker.com -o get-docker.sh
+          sh get-docker.sh
           systemctl start docker
-          usermod -aG docker ubuntu
-          
+          systemctl enable docker
+          rm get-docker.sh
+
           # Install Docker Compose
           echo "Installing Docker Compose..."
-          DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d '"' -f 4)
+          DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
           curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           chmod +x /usr/local/bin/docker-compose
           ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-          
-          # Install Nginx
-          echo "Installing Nginx..."
-          apt-get install -y nginx
+
+          # Verify Docker Compose
+          echo "Docker Compose installed: $(docker-compose --version)"
+
+          # Install and configure SSM Agent
+          echo "Configuring SSM Agent..."
+          if ! systemctl is-active --quiet amazon-ssm-agent; then
+              apt-get install -y amazon-ssm-agent || {
+                  wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+                  dpkg -i amazon-ssm-agent.deb
+                  rm amazon-ssm-agent.deb
+              }
+          fi
+          systemctl start amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+
+          # Configure ubuntu user
+          echo "Configuring ubuntu user..."
+          usermod -aG docker ubuntu
+
+          # Create application directory structure
+          echo "Creating application directories..."
+          mkdir -p /home/ubuntu/quotes-app
+          mkdir -p /home/ubuntu/quotes-app/deployment
+          mkdir -p /home/ubuntu/quotes-app/nginx-config
+
+          # Set proper ownership
+          chown -R ubuntu:ubuntu /home/ubuntu/quotes-app
+
+          # Configure Nginx
+          echo "Configuring Nginx..."
+          rm -f /etc/nginx/sites-enabled/default
+
+          # Create placeholder nginx deployment config
+          cat > /home/ubuntu/quotes-app/nginx-deployment.conf << 'EOF'
+          # Placeholder - will be updated during deployment
+          add_header X-Deployment-Environment "initializing" always;
+          add_header X-App-Version "initializing" always;
+          EOF
+
+          chown ubuntu:ubuntu /home/ubuntu/quotes-app/nginx-deployment.conf
+
+          # Enable and start Nginx
           systemctl enable nginx
-          
-          # Verify installations
-          echo "=== Installation Complete ==="
-          docker --version
-          docker-compose --version
-          nginx -v
+          systemctl start nginx
+
+          # Create initialization complete marker
+          cat > /home/ubuntu/quotes-app/.init-info << EOF
+          INITIALIZED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          AWS_CLI_VERSION=$(aws --version)
+          DOCKER_VERSION=$(docker --version)
+          DOCKER_COMPOSE_VERSION=$(docker-compose --version)
+          NGINX_VERSION=$(nginx -v 2>&1)
+          SSM_STATUS=$(systemctl is-active amazon-ssm-agent)
+          EOF
+
+          chown ubuntu:ubuntu /home/ubuntu/quotes-app/.init-info
+
+          echo "=== Instance Initialization Complete ==="
+          echo "Summary:"
+          echo "  - AWS CLI: $(aws --version)"
+          echo "  - Docker: $(docker --version)"
+          echo "  - Docker Compose: $(docker-compose --version)"
+          echo "  - Nginx: $(nginx -v 2>&1)"
+          echo "  - SSM Agent: $(systemctl is-active amazon-ssm-agent)"
+          echo "  - App directory: /home/ubuntu/quotes-app (created)"
+          echo ""
+          echo "Instance ready for deployment!"
+
+
+          # Pre-pull Docker images to speed up deployment
+          echo "Pre-pulling Docker images..."
+          docker login -u asha515 -p aashu@123#
+
+          docker pull asha515/quotes-db:latest &
+          docker pull asha515/quotes-api:latest &
+          docker pull asha515/quotes-frontend:latest &
+
+          wait
+
+          docker logout
+
+          echo "Images pre-pulled successfully"
+
+
           
           # Setup deployment directory
           mkdir -p /home/ubuntu/quotes-app/deployment
