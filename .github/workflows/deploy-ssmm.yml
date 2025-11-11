@@ -1,4 +1,4 @@
-name: Progressive Rolling Deployment
+name: Progressive Rolling Deployment with Detailed Monitoring
 
 on:
   push:
@@ -73,7 +73,8 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Create launch template version
+
+      - name: Create launch template version with checkpoints
         id: create
         run: |
           TAG=${{ needs.build.outputs.image_tag }}
@@ -83,47 +84,62 @@ jobs:
           set -ex
           exec > >(tee -a /var/log/user-data.log) 2>&1
           
-          echo "=== Starting deployment at $(date) ==="
+          # CHECKPOINT 1: Script started
+          echo "=== [CHECKPOINT 1/12] Starting deployment at $(date) ==="
+          echo "checkpoint-1-started" > /tmp/checkpoint-1
           
           # Wait for cloud-init
           cloud-init status --wait || true
+          echo "checkpoint-1-complete" > /tmp/checkpoint-1
           
-          # Update system
+          # CHECKPOINT 2: System update
+          echo "=== [CHECKPOINT 2/12] Updating system at $(date) ==="
+          echo "checkpoint-2-started" > /tmp/checkpoint-2
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -y
+          echo "checkpoint-2-complete" > /tmp/checkpoint-2
           
-          # Install base packages
-          echo "Installing base packages..."
+          # CHECKPOINT 3: Base packages
+          echo "=== [CHECKPOINT 3/12] Installing base packages at $(date) ==="
+          echo "checkpoint-3-started" > /tmp/checkpoint-3
           apt-get install -y curl wget unzip ca-certificates gnupg lsb-release nginx jq git
+          echo "checkpoint-3-complete" > /tmp/checkpoint-3
           
-          # Install AWS CLI v2
-          echo "Installing AWS CLI..."
+          # CHECKPOINT 4: AWS CLI
+          echo "=== [CHECKPOINT 4/12] Installing AWS CLI at $(date) ==="
+          echo "checkpoint-4-started" > /tmp/checkpoint-4
           cd /tmp
           curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip -q awscliv2.zip
           ./aws/install
           rm -rf aws awscliv2.zip
           aws --version
+          echo "checkpoint-4-complete: $(aws --version)" > /tmp/checkpoint-4
           
-          # Install Docker
-          echo "Installing Docker..."
+          # CHECKPOINT 5: Docker
+          echo "=== [CHECKPOINT 5/12] Installing Docker at $(date) ==="
+          echo "checkpoint-5-started" > /tmp/checkpoint-5
           curl -fsSL https://get.docker.com -o get-docker.sh
           sh get-docker.sh
           systemctl enable docker
           systemctl start docker
           rm get-docker.sh
           docker --version
+          echo "checkpoint-5-complete: $(docker --version)" > /tmp/checkpoint-5
           
-          # Install Docker Compose
-          echo "Installing Docker Compose..."
+          # CHECKPOINT 6: Docker Compose
+          echo "=== [CHECKPOINT 6/12] Installing Docker Compose at $(date) ==="
+          echo "checkpoint-6-started" > /tmp/checkpoint-6
           COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d'"' -f4)
           curl -sL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           chmod +x /usr/local/bin/docker-compose
           ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
           docker-compose --version
+          echo "checkpoint-6-complete: $(docker-compose --version)" > /tmp/checkpoint-6
           
-          # Install SSM Agent
-          echo "Installing SSM Agent..."
+          # CHECKPOINT 7: SSM Agent
+          echo "=== [CHECKPOINT 7/12] Installing SSM Agent at $(date) ==="
+          echo "checkpoint-7-started" > /tmp/checkpoint-7
           snap install amazon-ssm-agent --classic || {
               cd /tmp
               wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
@@ -132,100 +148,84 @@ jobs:
           }
           systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service || systemctl enable amazon-ssm-agent
           systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service || systemctl start amazon-ssm-agent
+          echo "checkpoint-7-complete" > /tmp/checkpoint-7
           
-          # Configure ubuntu user for Docker
-          echo "Configuring ubuntu user..."
+          # CHECKPOINT 8: Configure environment
+          echo "=== [CHECKPOINT 8/12] Configuring environment at $(date) ==="
+          echo "checkpoint-8-started" > /tmp/checkpoint-8
           usermod -aG docker ubuntu
-          
-          # Setup app directory
-          echo "Setting up app directory..."
           mkdir -p /home/ubuntu/quotes-app/deployment
           chown -R ubuntu:ubuntu /home/ubuntu/quotes-app
-          
-          # Configure Nginx
-          echo "Configuring Nginx..."
           systemctl enable nginx
           systemctl start nginx
           rm -f /etc/nginx/sites-enabled/default
+          echo "checkpoint-8-complete" > /tmp/checkpoint-8
           
-          # Create init marker
-          cat > /home/ubuntu/quotes-app/.init-info << INITEOF
-          INITIALIZED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          AWS_CLI=$(aws --version)
-          DOCKER=$(docker --version)
-          COMPOSE=$(docker-compose --version)
-          INITEOF
-          chown ubuntu:ubuntu /home/ubuntu/quotes-app/.init-info
-          
-          echo "=== Pre-pulling Docker images ==="
-          # Login with credentials from placeholders (replaced by sed)
+          # CHECKPOINT 9: Pre-pull images
+          echo "=== [CHECKPOINT 9/12] Pre-pulling Docker images at $(date) ==="
+          echo "checkpoint-9-started" > /tmp/checkpoint-9
           echo "DOCKER_PASS" | docker login -u "DOCKER_USER" --password-stdin
-          
-          # Pull images in parallel
           docker pull DOCKER_USER/quotes-db:latest &
           docker pull DOCKER_USER/quotes-api:latest &
           docker pull DOCKER_USER/quotes-app:latest &
           wait
-          
           docker logout
-          echo "Images pre-pulled"
+          docker images
+          echo "checkpoint-9-complete" > /tmp/checkpoint-9
           
-          # Download deployment files
-          echo "=== Downloading from S3 ==="
+          # CHECKPOINT 10: Download from S3
+          echo "=== [CHECKPOINT 10/12] Downloading from S3 at $(date) ==="
+          echo "checkpoint-10-started" > /tmp/checkpoint-10
           cd /home/ubuntu/quotes-app
-          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/docker-compose.yml . || { echo "Failed to download docker-compose.yml"; exit 1; }
-          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/deployment/ ./deployment/ --recursive || { echo "Failed to download deployment scripts"; exit 1; }
-          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/quotes.conf . || { echo "Failed to download nginx config"; exit 1; }
-          
-          echo "Files downloaded:"
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/docker-compose.yml . || { echo "Failed docker-compose.yml"; exit 1; }
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/deployment/ ./deployment/ --recursive || { echo "Failed deployment/"; exit 1; }
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/quotes.conf . || { echo "Failed quotes.conf"; exit 1; }
           ls -la
+          echo "checkpoint-10-complete" > /tmp/checkpoint-10
           
-          # Make scripts executable
+          # CHECKPOINT 11: Run deployment
+          echo "=== [CHECKPOINT 11/12] Running deployment script at $(date) ==="
+          echo "checkpoint-11-started" > /tmp/checkpoint-11
           chmod +x deployment/*.sh
+          bash deployment/deploy.sh DOCKER_USER DEPLOYMENT_TAG DOCKER_PASS production || { echo "deploy.sh failed"; exit 1; }
+          echo "checkpoint-11-complete" > /tmp/checkpoint-11
           
-          # Run deployment
-          echo "=== Running deployment script ==="
-          bash deployment/deploy.sh DOCKER_USER DEPLOYMENT_TAG DOCKER_PASS production || { echo "Deployment failed"; exit 1; }
-          
-          # Configure Nginx
-          echo "=== Configuring Nginx ==="
+          # CHECKPOINT 12: Configure Nginx
+          echo "=== [CHECKPOINT 12/12] Configuring Nginx at $(date) ==="
+          echo "checkpoint-12-started" > /tmp/checkpoint-12
           if [ -f quotes.conf ]; then
             cp quotes.conf /etc/nginx/sites-available/quotes.conf
             ln -sf /etc/nginx/sites-available/quotes.conf /etc/nginx/sites-enabled/quotes.conf
             nginx -t && systemctl reload nginx
           fi
+          echo "checkpoint-12-complete" > /tmp/checkpoint-12
           
-          # Verify deployment
+          # Final verification
           echo "=== Verifying deployment ==="
           docker ps -a
           sleep 10
-          curl -s http://localhost:80 && echo "App responding" || echo "App not responding yet"
+          curl -s http://localhost:80 && echo "✅ App responding" || echo "⚠️  App not responding"
           
           # Success marker
           echo "deployment_complete_$(date +%s)" > /tmp/deployment-complete
           
-          echo "=== Deployment completed at $(date) ==="
+          echo "=== ✅ ALL CHECKPOINTS PASSED - Deployment completed at $(date) ==="
           USERDATA
           
-          # Replace ALL placeholders
+          # Replace placeholders
           sed -i "s|DEPLOYMENT_BUCKET|${{ secrets.DEPLOYMENT_BUCKET }}|g" user-data.sh
           sed -i "s|DEPLOYMENT_TAG|${TAG}|g" user-data.sh
           sed -i "s|DOCKER_USER|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
           sed -i "s|DOCKER_PASS|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
           
-          # Verify no placeholders remain
-          echo "=== Verifying placeholder replacement ==="
+          # Verify replacements
           if grep -q "DEPLOYMENT_BUCKET\|DEPLOYMENT_TAG\|DOCKER_USER\|DOCKER_PASS" user-data.sh; then
-            echo "❌ ERROR: Placeholders still exist!"
-            grep -n "DEPLOYMENT_BUCKET\|DEPLOYMENT_TAG\|DOCKER_USER\|DOCKER_PASS" user-data.sh
+            echo "❌ Placeholders still exist!"
             exit 1
           fi
-          echo "✅ All placeholders replaced"
           
-          # Base64 encode
+          # Create template
           USER_DATA_B64=$(base64 -w 0 user-data.sh)
-          
-          # Create template version
           VERSION=$(aws ec2 create-launch-template-version \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --source-version '$Latest' \
@@ -278,7 +278,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy first instance
+      - name: Deploy first instance with detailed monitoring
         id: deploy
         run: |
           echo "=== Deploying Instance 1 ==="
@@ -295,48 +295,95 @@ jobs:
           
           # Wait for running
           aws ec2 wait instance-running --instance-ids $INSTANCE_ID
-          echo "Instance running, waiting for user-data to complete..."
+          echo "Instance is running, waiting for user-data execution..."
           
-          # Wait for user-data completion (check for marker file)
-          for i in {1..40}; do
-            sleep 30
-            echo "Checking deployment progress ($i/40)..."
+          # Initial wait for SSM
+          sleep 120
+          
+          # Monitor checkpoints
+          echo "=== Monitoring Installation Progress ==="
+          for i in {1..60}; do
+            echo ""
+            echo "--- Check $i/60 at $(date) ---"
             
+            # Check checkpoint status
             CMD=$(aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["test -f /tmp/deployment-complete && echo ready || echo not_ready"]' \
+              --parameters 'commands=[
+                "echo === CHECKPOINT STATUS ===",
+                "ls -1 /tmp/checkpoint-* 2>/dev/null | wc -l | xargs echo Completed checkpoints:",
+                "echo",
+                "echo === CHECKPOINT DETAILS ===",
+                "for f in /tmp/checkpoint-*; do echo \"$f: $(cat $f 2>/dev/null)\"; done 2>/dev/null || echo No checkpoints yet",
+                "echo",
+                "echo === RECENT LOG (last 15 lines) ===",
+                "tail -15 /var/log/user-data.log 2>/dev/null || echo No log yet",
+                "echo",
+                "echo === PROCESS CHECK ===",
+                "ps aux | grep -E \"apt-get|docker|curl|aws\" | grep -v grep | head -5 || echo No relevant processes"
+              ]' \
               --query 'Command.CommandId' \
               --output text 2>/dev/null || echo "")
             
-            if [ -z "$CMD" ]; then
-              echo "SSM not ready..."
-              continue
+            if [ -n "$CMD" ]; then
+              sleep 10
+              
+              OUTPUT=$(aws ssm get-command-invocation \
+                --command-id "$CMD" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardOutputContent' \
+                --output text 2>/dev/null || echo "Cannot fetch yet")
+              
+              echo "$OUTPUT"
+              
+              # Check if complete
+              if echo "$OUTPUT" | grep -q "deployment_complete"; then
+                echo ""
+                echo "✅✅✅ DEPLOYMENT COMPLETE ✅✅✅"
+                break
+              fi
+              
+              # Check checkpoint count
+              CHECKPOINT_COUNT=$(echo "$OUTPUT" | grep "Completed checkpoints:" | grep -oE '[0-9]+' || echo "0")
+              echo "Progress: $CHECKPOINT_COUNT/12 checkpoints"
+            else
+              echo "SSM not ready yet..."
             fi
             
-            sleep 10
-            
-            DEPLOY_STATUS=$(aws ssm get-command-invocation \
-              --command-id "$CMD" \
-              --instance-id "$INSTANCE_ID" \
-              --query 'StandardOutputContent' \
-              --output text 2>/dev/null | tr -d '\n\r ' || echo "not_ready")
-            
-            if [ "$DEPLOY_STATUS" = "ready" ]; then
-              echo "✅ User-data deployment complete"
-              break
-            fi
-            
-            if [ $i -eq 40 ]; then
-              echo "❌ User-data timeout"
+            if [ $i -eq 60 ]; then
+              echo ""
+              echo "❌❌❌ TIMEOUT AFTER 30 MINUTES ❌❌❌"
+              echo "Fetching final logs..."
+              
+              FINAL_CMD=$(aws ssm send-command \
+                --instance-ids "$INSTANCE_ID" \
+                --document-name "AWS-RunShellScript" \
+                --parameters 'commands=["cat /var/log/user-data.log"]' \
+                --query 'Command.CommandId' \
+                --output text)
+              
+              sleep 10
+              
+              aws ssm get-command-invocation \
+                --command-id "$FINAL_CMD" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardOutputContent' \
+                --output text || echo "Cannot fetch logs"
+              
               aws ec2 terminate-instances --instance-ids $INSTANCE_ID
               exit 1
             fi
+            
+            sleep 30
           done
           
-          # Now check application health
-          sleep 30
-          CMD=$(aws ssm send-command \
+          # Health check
+          echo ""
+          echo "=== Final Health Check ==="
+          sleep 20
+          
+          HEALTH_CMD=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 2>/dev/null || echo 000"]' \
@@ -346,7 +393,7 @@ jobs:
           sleep 15
           
           STATUS=$(aws ssm get-command-invocation \
-            --command-id "$CMD" \
+            --command-id "$HEALTH_CMD" \
             --instance-id "$INSTANCE_ID" \
             --query 'StandardOutputContent' \
             --output text | tr -cd '0-9' | head -c 3)
@@ -359,12 +406,13 @@ jobs:
             exit 1
           fi
           
-          echo "✅ Health check passed"
+          echo "✅ Health check passed!"
           
-          # Register and set traffic
+          # Register to target group
           aws elbv2 register-targets --target-group-arn ${{ env.NEW_TG_ARN }} --targets Id=$INSTANCE_ID
           sleep 60
           
+          # Set traffic split
           aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} \
             --default-actions Type=forward,ForwardConfig="{
               TargetGroups=[
@@ -373,7 +421,7 @@ jobs:
               ]
             }"
           
-          echo "✅ Instance 1 deployed with 80/20 split"
+          echo "✅✅✅ INSTANCE 1 DEPLOYED SUCCESSFULLY ✅✅✅"
 
   deploy-remaining-instances:
     needs: [deploy-instance-1, get-old-instances, create-launch-template, build]
@@ -410,50 +458,52 @@ jobs:
           echo "✅ Launched: $NEW_INSTANCE"
           
           aws ec2 wait instance-running --instance-ids $NEW_INSTANCE
-          echo "Waiting for user-data..."
+          sleep 120
           
-          # Wait for deployment completion
-          for i in {1..40}; do
-            sleep 30
-            
+          # Monitor deployment
+          for i in {1..60}; do
             CMD=$(aws ssm send-command \
               --instance-ids "$NEW_INSTANCE" \
               --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["test -f /tmp/deployment-complete && echo ready || echo not_ready"]' \
+              --parameters 'commands=["ls -1 /tmp/checkpoint-* 2>/dev/null | wc -l"]' \
               --query 'Command.CommandId' \
               --output text 2>/dev/null || echo "")
             
-            [ -z "$CMD" ] && continue
+            [ -z "$CMD" ] && { sleep 30; continue; }
             
             sleep 10
             
-            STATUS=$(aws ssm get-command-invocation \
+            COUNT=$(aws ssm get-command-invocation \
               --command-id "$CMD" \
               --instance-id "$NEW_INSTANCE" \
               --query 'StandardOutputContent' \
-              --output text 2>/dev/null | tr -d '\n\r ' || echo "not_ready")
+              --output text | tr -d '\n\r ')
             
-            [ "$STATUS" = "ready" ] && break
+            echo "Checkpoints: $COUNT/12"
             
-            if [ $i -eq 40 ]; then
+            [ "$COUNT" = "12" ] && break
+            
+            if [ $i -eq 60 ]; then
               echo "❌ Timeout"
               aws ec2 terminate-instances --instance-ids $NEW_INSTANCE
               exit 1
             fi
+            
+            sleep 30
           done
           
           # Health check
-          sleep 30
-          CMD=$(aws ssm send-command \
+          sleep 20
+          HEALTH_CMD=$(aws ssm send-command \
             --instance-ids "$NEW_INSTANCE" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 2>/dev/null || echo 000"]' \
+            --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80"]' \
             --query 'Command.CommandId' --output text)
           
           sleep 15
           
           HTTP_STATUS=$(aws ssm get-command-invocation \
-            --command-id "$CMD" \
+            --command-id "$HEALTH_CMD" \
             --instance-id "$NEW_INSTANCE" \
             --query 'StandardOutputContent' \
             --output text | tr -cd '0-9' | head -c 3)
@@ -512,4 +562,4 @@ jobs:
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --default-version ${{ needs.create-launch-template.outputs.template_version }}
           
-          echo "✅ DEPLOYMENT COMPLETE"
+          echo "✅✅✅ DEPLOYMENT COMPLETE ✅✅✅"
