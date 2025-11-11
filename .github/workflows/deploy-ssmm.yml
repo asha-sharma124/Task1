@@ -73,192 +73,159 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Create launch template version
         id: create
         run: |
           TAG=${{ needs.build.outputs.image_tag }}
           
-          cat > user-data.sh << 'EOF'
+          cat > user-data.sh << 'USERDATA'
           #!/bin/bash
-          set -e
-          exec > >(tee /var/log/user-data.log) 2>&1
+          set -ex
+          exec > >(tee -a /var/log/user-data.log) 2>&1
           
           echo "=== Starting deployment at $(date) ==="
           
+          # Wait for cloud-init
+          cloud-init status --wait || true
+          
           # Update system
-          #!/bin/bash
-          set -e
-
-          echo "=== Starting Instance Initialization ==="
-          echo "Timestamp: $(date)"
-
-          # Update system
-          echo "Updating system packages..."
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update -y
-
-          # Install required packages
-          echo "Installing required packages..."
-          apt-get install -y \
-              curl \
-              wget \
-              unzip \
-              ca-certificates \
-              gnupg \
-              lsb-release \
-              nginx \
-              jq \
-              git
-
+          
+          # Install base packages
+          echo "Installing base packages..."
+          apt-get install -y curl wget unzip ca-certificates gnupg lsb-release nginx jq git
+          
           # Install AWS CLI v2
-          echo "Installing AWS CLI v2..."
+          echo "Installing AWS CLI..."
           cd /tmp
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip -q awscliv2.zip
           ./aws/install
           rm -rf aws awscliv2.zip
-
-          # Verify AWS CLI
-          echo "AWS CLI installed: $(aws --version)"
-
+          aws --version
+          
           # Install Docker
           echo "Installing Docker..."
           curl -fsSL https://get.docker.com -o get-docker.sh
           sh get-docker.sh
-          systemctl start docker
           systemctl enable docker
+          systemctl start docker
           rm get-docker.sh
-
+          docker --version
+          
           # Install Docker Compose
           echo "Installing Docker Compose..."
-          DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
-          curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d'"' -f4)
+          curl -sL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
           chmod +x /usr/local/bin/docker-compose
           ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-
-          # Verify Docker Compose
-          echo "Docker Compose installed: $(docker-compose --version)"
-
-          # Install and configure SSM Agent
-          echo "Configuring SSM Agent..."
-          if ! systemctl is-active --quiet amazon-ssm-agent; then
-              apt-get install -y amazon-ssm-agent || {
-                  wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
-                  dpkg -i amazon-ssm-agent.deb
-                  rm amazon-ssm-agent.deb
-              }
-          fi
-          systemctl start amazon-ssm-agent
-          systemctl enable amazon-ssm-agent
-
-          # Configure ubuntu user
+          docker-compose --version
+          
+          # Install SSM Agent
+          echo "Installing SSM Agent..."
+          snap install amazon-ssm-agent --classic || {
+              cd /tmp
+              wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+              dpkg -i amazon-ssm-agent.deb
+              rm amazon-ssm-agent.deb
+          }
+          systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service || systemctl enable amazon-ssm-agent
+          systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service || systemctl start amazon-ssm-agent
+          
+          # Configure ubuntu user for Docker
           echo "Configuring ubuntu user..."
           usermod -aG docker ubuntu
-
-          # Create application directory structure
-          echo "Creating application directories..."
-          mkdir -p /home/ubuntu/quotes-app
+          
+          # Setup app directory
+          echo "Setting up app directory..."
           mkdir -p /home/ubuntu/quotes-app/deployment
-          mkdir -p /home/ubuntu/quotes-app/nginx-config
-
-          # Set proper ownership
           chown -R ubuntu:ubuntu /home/ubuntu/quotes-app
-
+          
           # Configure Nginx
           echo "Configuring Nginx..."
-          rm -f /etc/nginx/sites-enabled/default
-
-          # Create placeholder nginx deployment config
-          cat > /home/ubuntu/quotes-app/nginx-deployment.conf << 'EOF'
-          # Placeholder - will be updated during deployment
-          add_header X-Deployment-Environment "initializing" always;
-          add_header X-App-Version "initializing" always;
-          EOF
-
-          chown ubuntu:ubuntu /home/ubuntu/quotes-app/nginx-deployment.conf
-
-          # Enable and start Nginx
           systemctl enable nginx
           systemctl start nginx
-
-          # Create initialization complete marker
-          cat > /home/ubuntu/quotes-app/.init-info << EOF
-          INITIALIZED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          AWS_CLI_VERSION=$(aws --version)
-          DOCKER_VERSION=$(docker --version)
-          DOCKER_COMPOSE_VERSION=$(docker-compose --version)
-          NGINX_VERSION=$(nginx -v 2>&1)
-          SSM_STATUS=$(systemctl is-active amazon-ssm-agent)
-          EOF
-
-          chown ubuntu:ubuntu /home/ubuntu/quotes-app/.init-info
-
-          echo "=== Instance Initialization Complete ==="
-          echo "Summary:"
-          echo "  - AWS CLI: $(aws --version)"
-          echo "  - Docker: $(docker --version)"
-          echo "  - Docker Compose: $(docker-compose --version)"
-          echo "  - Nginx: $(nginx -v 2>&1)"
-          echo "  - SSM Agent: $(systemctl is-active amazon-ssm-agent)"
-          echo "  - App directory: /home/ubuntu/quotes-app (created)"
-          echo ""
-          echo "Instance ready for deployment!"
-
-
-          # Pre-pull Docker images to speed up deployment
-          echo "Pre-pulling Docker images..."
-          docker login -u asha515 -p aashu@123#
-
-          docker pull asha515/quotes-db:latest &
-          docker pull asha515/quotes-api:latest &
-          docker pull asha515/quotes-frontend:latest &
-
-          wait
-
-          docker logout
-
-          echo "Images pre-pulled successfully"
-
-
+          rm -f /etc/nginx/sites-enabled/default
           
-          # Setup deployment directory
-          mkdir -p /home/ubuntu/quotes-app/deployment
-          chown -R ubuntu:ubuntu /home/ubuntu/quotes-app
-          cd /home/ubuntu/quotes-app
+          # Create init marker
+          cat > /home/ubuntu/quotes-app/.init-info << INITEOF
+          INITIALIZED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          AWS_CLI=$(aws --version)
+          DOCKER=$(docker --version)
+          COMPOSE=$(docker-compose --version)
+          INITEOF
+          chown ubuntu:ubuntu /home/ubuntu/quotes-app/.init-info
+          
+          echo "=== Pre-pulling Docker images ==="
+          # Login with credentials from placeholders (replaced by sed)
+          echo "DOCKER_PASS" | docker login -u "DOCKER_USER" --password-stdin
+          
+          # Pull images in parallel
+          docker pull DOCKER_USER/quotes-db:latest &
+          docker pull DOCKER_USER/quotes-api:latest &
+          docker pull DOCKER_USER/quotes-app:latest &
+          wait
+          
+          docker logout
+          echo "Images pre-pulled"
           
           # Download deployment files
           echo "=== Downloading from S3 ==="
-          aws s3 cp s3://BUCKET/deployments/TAG/docker-compose.yml . || exit 1
-          aws s3 cp s3://BUCKET/deployments/TAG/deployment/ ./deployment/ --recursive || exit 1
-          aws s3 cp s3://BUCKET/deployments/TAG/quotes.conf . || exit 1
+          cd /home/ubuntu/quotes-app
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/docker-compose.yml . || { echo "Failed to download docker-compose.yml"; exit 1; }
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/deployment/ ./deployment/ --recursive || { echo "Failed to download deployment scripts"; exit 1; }
+          aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/quotes.conf . || { echo "Failed to download nginx config"; exit 1; }
           
+          echo "Files downloaded:"
+          ls -la
+          
+          # Make scripts executable
           chmod +x deployment/*.sh
           
           # Run deployment
           echo "=== Running deployment script ==="
-          bash deployment/deploy.sh USER TAG PASS production || exit 1
+          bash deployment/deploy.sh DOCKER_USER DEPLOYMENT_TAG DOCKER_PASS production || { echo "Deployment failed"; exit 1; }
           
           # Configure Nginx
+          echo "=== Configuring Nginx ==="
           if [ -f quotes.conf ]; then
             cp quotes.conf /etc/nginx/sites-available/quotes.conf
             ln -sf /etc/nginx/sites-available/quotes.conf /etc/nginx/sites-enabled/quotes.conf
-            rm -f /etc/nginx/sites-enabled/default
-            nginx -t && systemctl restart nginx
+            nginx -t && systemctl reload nginx
           fi
           
-          # CREATE SUCCESS MARKER FILE
-          echo "success" > /tmp/deployment-complete
+          # Verify deployment
+          echo "=== Verifying deployment ==="
+          docker ps -a
+          sleep 10
+          curl -s http://localhost:80 && echo "App responding" || echo "App not responding yet"
+          
+          # Success marker
+          echo "deployment_complete_$(date +%s)" > /tmp/deployment-complete
           
           echo "=== Deployment completed at $(date) ==="
-          EOF
+          USERDATA
           
-          sed -i "s|BUCKET|${{ secrets.DEPLOYMENT_BUCKET }}|g" user-data.sh
-          sed -i "s|TAG|${TAG}|g" user-data.sh
-          sed -i "s|USER|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
-          sed -i "s|PASS|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
+          # Replace ALL placeholders
+          sed -i "s|DEPLOYMENT_BUCKET|${{ secrets.DEPLOYMENT_BUCKET }}|g" user-data.sh
+          sed -i "s|DEPLOYMENT_TAG|${TAG}|g" user-data.sh
+          sed -i "s|DOCKER_USER|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
+          sed -i "s|DOCKER_PASS|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
           
+          # Verify no placeholders remain
+          echo "=== Verifying placeholder replacement ==="
+          if grep -q "DEPLOYMENT_BUCKET\|DEPLOYMENT_TAG\|DOCKER_USER\|DOCKER_PASS" user-data.sh; then
+            echo "❌ ERROR: Placeholders still exist!"
+            grep -n "DEPLOYMENT_BUCKET\|DEPLOYMENT_TAG\|DOCKER_USER\|DOCKER_PASS" user-data.sh
+            exit 1
+          fi
+          echo "✅ All placeholders replaced"
+          
+          # Base64 encode
           USER_DATA_B64=$(base64 -w 0 user-data.sh)
           
+          # Create template version
           VERSION=$(aws ec2 create-launch-template-version \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --source-version '$Latest' \
