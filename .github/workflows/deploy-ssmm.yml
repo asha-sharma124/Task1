@@ -650,7 +650,10 @@ jobs:
           
           # CHECKPOINT 11: Run deployment
           echo "=== [CHECKPOINT 11/12] Running deployment script at $(date) ==="
-          docker compose up -d
+          echo "checkpoint-11-started" > /tmp/checkpoint-11
+          cd /home/ubuntu/quotes-app
+          docker-compose up -d
+          sleep 20
           # CHECKPOINT 12: Configure Nginx
           echo "=== [CHECKPOINT 12/12] Configuring Nginx at $(date) ==="
           echo "checkpoint-12-started" > /tmp/checkpoint-12
