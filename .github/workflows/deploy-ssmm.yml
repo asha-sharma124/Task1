@@ -192,12 +192,10 @@ jobs:
           echo "✅ Launched: $INSTANCE_ID"
           
           aws ec2 wait instance-running --instance-ids $INSTANCE_ID
-          sleep 90
+          sleep 120
           
           # Health check
-          HEALTHY=false
-          for i in {1..60}; do
-            CMD=$(aws ssm send-command \
+          CMD=$(aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
               --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 || echo 000"]' \
