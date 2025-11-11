@@ -179,14 +179,10 @@ jobs:
           aws s3 cp s3://DEPLOYMENT_BUCKET/deployments/DEPLOYMENT_TAG/quotes.conf . || { echo "Failed quotes.conf"; exit 1; }
           ls -la
           echo "checkpoint-10-complete" > /tmp/checkpoint-10
-          
-          # CHECKPOINT 11: Run deployment
-          echo "=== [CHECKPOINT 11/12] Running deployment script at $(date) ==="
-          echo "checkpoint-11-started" > /tmp/checkpoint-11
-          chmod +x deployment/*.sh
-          bash deployment/deploy.sh DOCKER_USER DEPLOYMENT_TAG DOCKER_PASS production || { echo "deploy.sh failed"; exit 1; }
-          echo "checkpoint-11-complete" > /tmp/checkpoint-11
-          
+          docker container prune -f || true
+          docker image prune -af --filter "until=24h" || true
+          docker compose up -d
+
           # CHECKPOINT 12: Configure Nginx
           echo "=== [CHECKPOINT 12/12] Configuring Nginx at $(date) ==="
           echo "checkpoint-12-started" > /tmp/checkpoint-12
