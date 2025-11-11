@@ -87,10 +87,7 @@ jobs:
           # CHECKPOINT 1: Script started
           echo "=== [CHECKPOINT 1/12] Starting deployment at $(date) ==="
           echo "checkpoint-1-started" > /tmp/checkpoint-1
-          
-          # Wait for cloud-init
-          cloud-init status --wait || true
-          echo "checkpoint-1-complete" > /tmp/checkpoint-1
+        
           
           # CHECKPOINT 2: System update
           echo "=== [CHECKPOINT 2/12] Updating system at $(date) ==="
