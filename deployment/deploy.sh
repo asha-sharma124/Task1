@@ -35,7 +35,7 @@ docker-compose up -d
 sleep 20
 
 
-cd /etc/nginx/sites-enabled
-rm -rf default
-cp /home/ubuntu/quotes-app/quotes.conf /etc/nginx/conf.d/
-sudo systemctl restart nginx
+# cd /etc/nginx/sites-enabled
+# rm -rf default
+# cp /home/ubuntu/quotes-app/quotes.conf /etc/nginx/conf.d/
+# sudo systemctl restart nginx

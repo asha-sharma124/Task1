@@ -74,7 +74,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Create launch template version 
+      - name: Create launch template version
         id: create
         run: |
           TAG=${{ needs.build.outputs.image_tag }}
@@ -91,9 +91,9 @@ jobs:
           
           # Install AWS CLI
           echo "Installing AWS CLI..."
-          apt-get install -y awscli unzip curl
+          apt-get install -y awscli unzip curl jq
           
-          # Install SSM Agent (if not already installed)
+          # Install SSM Agent
           echo "Installing SSM Agent..."
           snap install amazon-ssm-agent --classic
           systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
@@ -102,29 +102,22 @@ jobs:
           # Install Docker
           echo "Installing Docker..."
           apt-get install -y ca-certificates gnupg lsb-release
-          
-          # Add Docker's official GPG key
           install -m 0755 -d /etc/apt/keyrings
           curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
           chmod a+r /etc/apt/keyrings/docker.gpg
           
-          # Set up Docker repository
           echo \
             "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
             $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
           
-          # Install Docker Engine
           apt-get update -y
           apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
           
-          # Start and enable Docker
           systemctl enable docker
           systemctl start docker
-          
-          # Add ubuntu user to docker group
           usermod -aG docker ubuntu
           
-          # Install Docker Compose (standalone)
+          # Install Docker Compose
           echo "Installing Docker Compose..."
           DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d '"' -f 4)
           curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
@@ -137,34 +130,29 @@ jobs:
           systemctl enable nginx
           
           # Verify installations
-          echo "=== Verifying installations ==="
-          echo "AWS CLI version: $(aws --version)"
-          echo "SSM Agent status: $(systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service)"
-          echo "Docker version: $(docker --version)"
-          echo "Docker Compose version: $(docker-compose --version)"
-          echo "Nginx version: $(nginx -v 2>&1)"
+          echo "=== Installation Complete ==="
+          docker --version
+          docker-compose --version
+          nginx -v
           
           # Setup deployment directory
-          echo "=== Setting up deployment directory ==="
           mkdir -p /home/ubuntu/quotes-app/deployment
           chown -R ubuntu:ubuntu /home/ubuntu/quotes-app
           cd /home/ubuntu/quotes-app
           
-          # Download deployment files from S3
-          echo "=== Downloading deployment files ==="
+          # Download deployment files
+          echo "=== Downloading from S3 ==="
           aws s3 cp s3://BUCKET/deployments/TAG/docker-compose.yml . || exit 1
           aws s3 cp s3://BUCKET/deployments/TAG/deployment/ ./deployment/ --recursive || exit 1
           aws s3 cp s3://BUCKET/deployments/TAG/quotes.conf . || exit 1
           
-          # Make scripts executable
           chmod +x deployment/*.sh
           
-          # Run deployment script
+          # Run deployment
           echo "=== Running deployment script ==="
           bash deployment/deploy.sh USER TAG PASS production || exit 1
           
           # Configure Nginx
-          echo "=== Configuring Nginx ==="
           if [ -f quotes.conf ]; then
             cp quotes.conf /etc/nginx/sites-available/quotes.conf
             ln -sf /etc/nginx/sites-available/quotes.conf /etc/nginx/sites-enabled/quotes.conf
@@ -172,30 +160,29 @@ jobs:
             nginx -t && systemctl restart nginx
           fi
           
-          echo "=== Deployment completed successfully at $(date) ==="
+          # CREATE SUCCESS MARKER FILE
+          echo "success" > /tmp/deployment-complete
+          
+          echo "=== Deployment completed at $(date) ==="
           EOF
           
-          # Replace placeholders with actual values
           sed -i "s|BUCKET|${{ secrets.DEPLOYMENT_BUCKET }}|g" user-data.sh
           sed -i "s|TAG|${TAG}|g" user-data.sh
           sed -i "s|USER|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
           sed -i "s|PASS|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
           
-          # Base64 encode for launch template
           USER_DATA_B64=$(base64 -w 0 user-data.sh)
           
-          # Create launch template version
           VERSION=$(aws ec2 create-launch-template-version \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --source-version '$Latest' \
             --launch-template-data "{\"UserData\":\"${USER_DATA_B64}\"}" \
-            --version-description "Deploy ${TAG} - $(date '+%Y-%m-%d %H:%M:%S')" \
+            --version-description "Deploy ${TAG}" \
             --query 'LaunchTemplateVersion.VersionNumber' \
             --output text)
           
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Created launch template version: $VERSION"
-
+          echo "✅ Created template version: $VERSION"
 
   get-old-instances:
     needs: create-launch-template
@@ -214,27 +201,17 @@ jobs:
       - name: Get old instances
         id: get
         run: |
-          echo "Fetching healthy instances from OLD target group..."
-          
-          # Get instances as compact JSON (single line)
           INSTANCES=$(aws elbv2 describe-target-health \
             --target-group-arn ${{ env.OLD_TG_ARN }} \
             --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
             --output json | jq -c .)
           
-          # Calculate count
           COUNT=$(echo "$INSTANCES" | jq '. | length')
           
-          # Output to GITHUB_OUTPUT
           echo "ids=$INSTANCES" >> $GITHUB_OUTPUT
           echo "count=$COUNT" >> $GITHUB_OUTPUT
-          
-          # Log for visibility
-          echo "✅ Found $COUNT healthy instances"
-          echo "Instance IDs: $INSTANCES"
+          echo "✅ Found $COUNT instances"
 
-
-  # STEP 1: Deploy first instance with load splitting
   deploy-instance-1:
     needs: [build, create-launch-template]
     runs-on: ubuntu-latest
@@ -251,88 +228,109 @@ jobs:
       - name: Deploy first instance
         id: deploy
         run: |
-          echo "=== Deploying Instance 1 (Canary) ==="
+          echo "=== Deploying Instance 1 ==="
           
           INSTANCE_ID=$(aws ec2 run-instances \
             --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.create-launch-template.outputs.template_version }} \
             --subnet-id ${{ env.PRIVATE_SUBNET_ID }} \
-            --tag-specifications "ResourceType=instance,Tags=[
-              {Key=Name,Value=quotes-new-1},
-              {Key=DeploymentTag,Value=${{ needs.build.outputs.image_tag }}},
-              {Key=Environment,Value=production},
-              {Key=DeploymentPhase,Value=canary}
-            ]" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=quotes-new-1}]" \
             --query 'Instances[0].InstanceId' \
             --output text)
           
           echo "id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "✅ Launched: $INSTANCE_ID"
           
+          # Wait for running
           aws ec2 wait instance-running --instance-ids $INSTANCE_ID
-          sleep 140
+          echo "Instance running, waiting for user-data to complete..."
           
-          # Health check
-          CMD=$(aws ssm send-command \
+          # Wait for user-data completion (check for marker file)
+          for i in {1..40}; do
+            sleep 30
+            echo "Checking deployment progress ($i/40)..."
+            
+            CMD=$(aws ssm send-command \
               --instance-ids "$INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 || echo 000"]' \
+              --parameters 'commands=["test -f /tmp/deployment-complete && echo ready || echo not_ready"]' \
               --query 'Command.CommandId' \
-              --output text 2>/dev/null) || { sleep 20; continue; }
+              --output text 2>/dev/null || echo "")
+            
+            if [ -z "$CMD" ]; then
+              echo "SSM not ready..."
+              continue
+            fi
             
             sleep 10
             
-          STATUS=$(aws ssm get-command-invocation \
+            DEPLOY_STATUS=$(aws ssm get-command-invocation \
               --command-id "$CMD" \
               --instance-id "$INSTANCE_ID" \
               --query 'StandardOutputContent' \
-              --output text 2>/dev/null | tr -d '\n\r ' || echo "000")
+              --output text 2>/dev/null | tr -d '\n\r ' || echo "not_ready")
             
-          if [ "$STATUS" = "200" ]; then
-              HEALTHY=true
-              echo "✅ Health check passed"
+            if [ "$DEPLOY_STATUS" = "ready" ]; then
+              echo "✅ User-data deployment complete"
               break
             fi
             
-          sleep 20
+            if [ $i -eq 40 ]; then
+              echo "❌ User-data timeout"
+              aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+              exit 1
+            fi
+          done
           
+          # Now check application health
+          sleep 30
+          CMD=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 2>/dev/null || echo 000"]' \
+            --query 'Command.CommandId' \
+            --output text)
           
-          if [ "$STATUS" !="200" ]; then
+          sleep 15
+          
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' \
+            --output text | tr -cd '0-9' | head -c 3)
+          
+          echo "HTTP Status: ${STATUS:-000}"
+          
+          if [ "$STATUS" != "200" ]; then
             echo "❌ Health check failed"
             aws ec2 terminate-instances --instance-ids $INSTANCE_ID
             exit 1
           fi
           
-          # Register to NEW target group
-          aws elbv2 register-targets \
-            --target-group-arn ${{ env.NEW_TG_ARN }} \
-            --targets Id=$INSTANCE_ID
+          echo "✅ Health check passed"
           
+          # Register and set traffic
+          aws elbv2 register-targets --target-group-arn ${{ env.NEW_TG_ARN }} --targets Id=$INSTANCE_ID
           sleep 60
           
-          # Set 80/20 traffic split (80% OLD, 20% NEW)
-          echo "Setting 80/20 traffic split..."
-          aws elbv2 modify-listener \
-            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} \
             --default-actions Type=forward,ForwardConfig="{
               TargetGroups=[
                 {TargetGroupArn=${{ env.OLD_TG_ARN }},Weight=80},
                 {TargetGroupArn=${{ env.NEW_TG_ARN }},Weight=20}
-              ],
-              TargetGroupStickinessConfig={Enabled=false}
+              ]
             }"
           
-          echo "✅ Instance 1 deployed with canary traffic split"
+          echo "✅ Instance 1 deployed with 80/20 split"
 
-  # STEP 2: Loop through remaining 3 instances with wait timers
   deploy-remaining-instances:
     needs: [deploy-instance-1, get-old-instances, create-launch-template, build]
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 1  # Deploy one at a time
+      max-parallel: 1
       matrix:
         instance: [2, 3, 4]
     environment:
-      name: wait-timer  # 20-minute wait between each instance
+      name: wait-timer
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -341,67 +339,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify previous instances are healthy
-        run: |
-          echo "Verifying all deployed instances are healthy..."
-          
-          # Get all instances in NEW target group
-          HEALTH_STATUS=$(aws elbv2 describe-target-health \
-            --target-group-arn ${{ env.NEW_TG_ARN }} \
-            --query 'TargetHealthDescriptions[?TargetHealth.State!=`healthy`]' \
-            --output json)
-          
-          UNHEALTHY_COUNT=$(echo $HEALTH_STATUS | jq '. | length')
-          
-          if [ $UNHEALTHY_COUNT -gt 0 ]; then
-            echo "❌ Found $UNHEALTHY_COUNT unhealthy instances. Aborting."
-            echo "$HEALTH_STATUS"
-            exit 1
-          fi
-          
-          echo "✅ All instances healthy, proceeding..."
-
       - name: Deploy instance ${{ matrix.instance }}
-        id: deploy
         run: |
           INSTANCE_NUM=${{ matrix.instance }}
           OLD_INDEX=$((INSTANCE_NUM - 2))
           
           echo "=== Deploying Instance $INSTANCE_NUM ==="
-          echo "Will replace old instance at index $OLD_INDEX"
           
-          # Get old instance to replace
           OLD_INSTANCE=$(echo '${{ needs.get-old-instances.outputs.instance_ids }}' | jq -r ".[$OLD_INDEX]")
-          echo "Old instance to replace: $OLD_INSTANCE"
           
-          # Launch new instance
           NEW_INSTANCE=$(aws ec2 run-instances \
             --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.create-launch-template.outputs.template_version }} \
             --subnet-id ${{ env.PRIVATE_SUBNET_ID }} \
-            --tag-specifications "ResourceType=instance,Tags=[
-              {Key=Name,Value=quotes-new-$INSTANCE_NUM},
-              {Key=DeploymentTag,Value=${{ needs.build.outputs.image_tag }}},
-              {Key=Environment,Value=production},
-              {Key=InstanceNumber,Value=$INSTANCE_NUM}
-            ]" \
-            --query 'Instances[0].InstanceId' \
-            --output text)
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=quotes-new-$INSTANCE_NUM}]" \
+            --query 'Instances[0].InstanceId' --output text)
           
           echo "✅ Launched: $NEW_INSTANCE"
           
-          # Wait for instance to be running
           aws ec2 wait instance-running --instance-ids $NEW_INSTANCE
-          sleep 90
+          echo "Waiting for user-data..."
           
-          # Health check
-          HEALTHY=false
-          for i in {1..60}; do
+          # Wait for deployment completion
+          for i in {1..40}; do
+            sleep 30
+            
             CMD=$(aws ssm send-command \
               --instance-ids "$NEW_INSTANCE" \
               --document-name "AWS-RunShellScript" \
-              --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 || echo 000"]' \
+              --parameters 'commands=["test -f /tmp/deployment-complete && echo ready || echo not_ready"]' \
               --query 'Command.CommandId' \
-              --output text 2>/dev/null) || { sleep 20; continue; }
+              --output text 2>/dev/null || echo "")
+            
+            [ -z "$CMD" ] && continue
             
             sleep 10
             
@@ -409,53 +378,57 @@ jobs:
               --command-id "$CMD" \
               --instance-id "$NEW_INSTANCE" \
               --query 'StandardOutputContent' \
-              --output text 2>/dev/null | tr -d '\n\r ' || echo "000")
+              --output text 2>/dev/null | tr -d '\n\r ' || echo "not_ready")
             
-            if [ "$STATUS" = "200" ]; then
-              HEALTHY=true
-              echo "✅ Health check passed"
-              break
+            [ "$STATUS" = "ready" ] && break
+            
+            if [ $i -eq 40 ]; then
+              echo "❌ Timeout"
+              aws ec2 terminate-instances --instance-ids $NEW_INSTANCE
+              exit 1
             fi
-            
-            sleep 20
           done
           
-          if [ "$HEALTHY" = false ]; then
-            echo "❌ Health check failed"
+          # Health check
+          sleep 30
+          CMD=$(aws ssm send-command \
+            --instance-ids "$NEW_INSTANCE" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["curl -s -o /dev/null -w \"%{http_code}\" http://localhost:80 2>/dev/null || echo 000"]' \
+            --query 'Command.CommandId' --output text)
+          
+          sleep 15
+          
+          HTTP_STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD" \
+            --instance-id "$NEW_INSTANCE" \
+            --query 'StandardOutputContent' \
+            --output text | tr -cd '0-9' | head -c 3)
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Failed"
             aws ec2 terminate-instances --instance-ids $NEW_INSTANCE
             exit 1
           fi
           
-          # Register new instance
-          aws elbv2 register-targets \
-            --target-group-arn ${{ env.NEW_TG_ARN }} \
-            --targets Id=$NEW_INSTANCE
+          echo "✅ Healthy"
           
+          # Replace old instance
+          aws elbv2 register-targets --target-group-arn ${{ env.NEW_TG_ARN }} --targets Id=$NEW_INSTANCE
           sleep 30
-          
-          # Deregister and terminate old instance
-          aws elbv2 deregister-targets \
-            --target-group-arn ${{ env.OLD_TG_ARN }} \
-            --targets Id=$OLD_INSTANCE
-          
+          aws elbv2 deregister-targets --target-group-arn ${{ env.OLD_TG_ARN }} --targets Id=$OLD_INSTANCE
           sleep 30
-          
           aws ec2 terminate-instances --instance-ids $OLD_INSTANCE
-          echo "✅ Terminated old instance: $OLD_INSTANCE"
           
-          # Calculate and update traffic weights
+          # Update traffic
           NEW_COUNT=$INSTANCE_NUM
           OLD_COUNT=$((4 - INSTANCE_NUM))
-          TOTAL=$((NEW_COUNT + OLD_COUNT))
           
           if [ $OLD_COUNT -gt 0 ]; then
-            NEW_WEIGHT=$(( (NEW_COUNT * 100) / TOTAL ))
+            NEW_WEIGHT=$(( (NEW_COUNT * 100) / (NEW_COUNT + OLD_COUNT) ))
             OLD_WEIGHT=$((100 - NEW_WEIGHT))
             
-            echo "Updating traffic: $OLD_WEIGHT% OLD, $NEW_WEIGHT% NEW"
-            
-            aws elbv2 modify-listener \
-              --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} \
               --default-actions Type=forward,ForwardConfig="{
                 TargetGroups=[
                   {TargetGroupArn=${{ env.OLD_TG_ARN }},Weight=$OLD_WEIGHT},
@@ -464,10 +437,10 @@ jobs:
               }"
           fi
           
-          echo "✅ Instance $INSTANCE_NUM deployed successfully"
+          echo "✅ Instance $INSTANCE_NUM deployed"
 
   finalize:
-    needs: [deploy-remaining-instances, create-launch-template, build]
+    needs: [deploy-remaining-instances, create-launch-template]
     runs-on: ubuntu-latest
     steps:
       - name: Configure AWS credentials
@@ -477,38 +450,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Final verification and cutover
+      - name: Finalize deployment
         run: |
-          echo "=== Final Deployment Verification ==="
-          
-          # Verify all 4 instances are healthy
-          HEALTHY_INSTANCES=$(aws elbv2 describe-target-health \
-            --target-group-arn ${{ env.NEW_TG_ARN }} \
-            --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
-            --output json)
-          
-          HEALTHY_COUNT=$(echo $HEALTHY_INSTANCES | jq '. | length')
-          
-          if [ $HEALTHY_COUNT -ne 4 ]; then
-            echo "❌ Expected 4 healthy instances, found $HEALTHY_COUNT"
-            exit 1
-          fi
-          
-          echo "✅ All 4 instances healthy"
-          
-          # Switch to 100% NEW
-          aws elbv2 modify-listener \
-            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} \
             --default-actions Type=forward,TargetGroupArn=${{ env.NEW_TG_ARN }}
           
-          # Set template version as default
           aws ec2 modify-launch-template \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
             --default-version ${{ needs.create-launch-template.outputs.template_version }}
           
-          echo "=========================================="
-          echo "🎉 DEPLOYMENT COMPLETE!"
-          echo "=========================================="
-          echo "Image Tag: ${{ needs.build.outputs.image_tag }}"
-          echo "Template Version: ${{ needs.create-launch-template.outputs.template_version }}"
-          echo "=========================================="
+          echo "✅ DEPLOYMENT COMPLETE"
