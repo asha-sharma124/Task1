@@ -121,40 +121,40 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   get-old-instances:
-  needs: create-launch-template
-  runs-on: ubuntu-latest
-  outputs:
-    instance_ids: ${{ steps.get.outputs.ids }}
-    count: ${{ steps.get.outputs.count }}
-  steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+    needs: create-launch-template
+    runs-on: ubuntu-latest
+    outputs:
+      instance_ids: ${{ steps.get.outputs.ids }}
+      count: ${{ steps.get.outputs.count }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Get old instances
-      id: get
-      run: |
-        echo "Fetching healthy instances from OLD target group..."
-        
-        # Get instances as compact JSON (single line)
-        INSTANCES=$(aws elbv2 describe-target-health \
-          --target-group-arn ${{ env.OLD_TG_ARN }} \
-          --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
-          --output json | jq -c .)
-        
-        # Calculate count
-        COUNT=$(echo "$INSTANCES" | jq '. | length')
-        
-        # Output to GITHUB_OUTPUT
-        echo "ids=$INSTANCES" >> $GITHUB_OUTPUT
-        echo "count=$COUNT" >> $GITHUB_OUTPUT
-        
-        # Log for visibility
-        echo "✅ Found $COUNT healthy instances"
-        echo "Instance IDs: $INSTANCES"
+      - name: Get old instances
+        id: get
+        run: |
+          echo "Fetching healthy instances from OLD target group..."
+          
+          # Get instances as compact JSON (single line)
+          INSTANCES=$(aws elbv2 describe-target-health \
+            --target-group-arn ${{ env.OLD_TG_ARN }} \
+            --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`].Target.Id' \
+            --output json | jq -c .)
+          
+          # Calculate count
+          COUNT=$(echo "$INSTANCES" | jq '. | length')
+          
+          # Output to GITHUB_OUTPUT
+          echo "ids=$INSTANCES" >> $GITHUB_OUTPUT
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          
+          # Log for visibility
+          echo "✅ Found $COUNT healthy instances"
+          echo "Instance IDs: $INSTANCES"
 
 
   # STEP 1: Deploy first instance with load splitting
