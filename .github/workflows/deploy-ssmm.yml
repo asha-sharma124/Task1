@@ -1204,6 +1204,7 @@ jobs:
         run: |
           TAG=$(date +'%Y%m%d%H%M%S')
           echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
