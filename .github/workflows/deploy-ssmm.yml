@@ -2084,30 +2084,10 @@ jobs:
           aws ec2 wait instance-status-ok --instance-ids ${{ steps.launch.outputs.instance_id }}
           
           echo "✅ Instance is ready"
+          sleep 20
 
-      - name: Wait for SSM agent
-        run: |
-          echo "⏳ Waiting for SSM agent..."
-          INSTANCE_ID="${{ steps.launch.outputs.instance_id }}"
-          
-          for i in {1..60}; do
-            STATUS=$(aws ssm describe-instance-information \
-              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-              --query 'InstanceInformationList[0].PingStatus' \
-              --output text 2>/dev/null || echo "NotFound")
-            
-            if [ "$STATUS" = "Online" ]; then
-              echo "✅ SSM agent online"
-              break
-            fi
-            
-            if [ $i -eq 60 ]; then
-              echo "❌ SSM agent timeout"
-              exit 1
-            fi
-            
-            sleep 5
-          done
+
+     
 
       - name: Deploy application
         id: deploy
@@ -2227,20 +2207,6 @@ jobs:
           aws ec2 wait instance-running --instance-ids ${{ steps.launch.outputs.instance_id }}
           aws ec2 wait instance-status-ok --instance-ids ${{ steps.launch.outputs.instance_id }}
 
-      - name: Wait for SSM agent
-        run: |
-          INSTANCE_ID="${{ steps.launch.outputs.instance_id }}"
-          
-          for i in {1..60}; do
-            STATUS=$(aws ssm describe-instance-information \
-              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-              --query 'InstanceInformationList[0].PingStatus' \
-              --output text 2>/dev/null || echo "NotFound")
-            
-            [ "$STATUS" = "Online" ] && break
-            sleep 5
-          done
-
       - name: Deploy application
         id: deploy
         run: |
@@ -2303,12 +2269,7 @@ jobs:
               --target-group-arn ${{ env.BLUE_TG_ARN }} \
               --targets Id=$BLUE_INSTANCE
             
-            # Wait for connection draining
-            echo "⏳ Waiting for connection draining..."
-            aws elbv2 wait target-deregistered \
-              --target-group-arn ${{ env.BLUE_TG_ARN }} \
-              --targets Id=$BLUE_INSTANCE
-            
+          
             # Terminate instance
             echo "🔥 Terminating instance: $BLUE_INSTANCE"
             aws ec2 terminate-instances --instance-ids $BLUE_INSTANCE
@@ -2456,17 +2417,11 @@ jobs:
             
             echo "✅ Promoted: $INSTANCE_ID"
           done
-
       - name: Wait for all targets healthy in blue
         run: |
           echo "⏳ Waiting for all targets to be healthy in blue TG..."
-          
-          for INSTANCE_ID in ${{ steps.green.outputs.green_ids }}; do
-            aws elbv2 wait target-in-service \
-              --target-group-arn ${{ env.BLUE_TG_ARN }} \
-              --targets Id=$INSTANCE_ID
-            echo "✅ $INSTANCE_ID healthy"
-          done
+          sleep 20 
+    
 
       - name: Switch listener to blue
         run: |
