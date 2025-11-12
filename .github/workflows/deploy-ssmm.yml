@@ -2025,7 +2025,8 @@ jobs:
 
           aws s3 cp docker-compose.yml s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
           aws s3 cp deployment/ s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/deployment/ --recursive
-          
+          aws s3 cp ./nginx-config/quotes.conf s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
+
           echo "✅ Deployment files uploaded to S3"
 
       - name: Count current blue instances
@@ -2126,6 +2127,8 @@ jobs:
               "cd /home/ubuntu/quotes-app",
               "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/docker-compose.yml . --region ${{ env.AWS_REGION }}",
               "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/deployment/ ./deployment/ --recursive --region ${{ env.AWS_REGION }}",
+              "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/quotes.conf . --region ${{ env.AWS_REGION }}",
+
               "chmod +x deployment/*.sh",
               "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green"
             ]' \
@@ -2254,6 +2257,8 @@ jobs:
               "cd /home/ubuntu/quotes-app",
               "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/docker-compose.yml . --region ${{ env.AWS_REGION }}",
               "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/deployment/ ./deployment/ --recursive --region ${{ env.AWS_REGION }}",
+              "aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/quotes.conf . --region ${{ env.AWS_REGION }}",
+
               "chmod +x deployment/*.sh",
               "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green"
             ]' \
