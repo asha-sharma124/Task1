@@ -1235,7 +1235,8 @@ jobs:
           sed -i "s|build: ./app|image: ${{ secrets.DOCKER_USERNAME }}/quotes-app:${TAG}|g" docker-compose.yml
           
           aws s3 cp docker-compose.yml s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/
-          aws s3 cp deployment/ s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/deployment/ --recursive
+          aws s3 cp deployment/ s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/deployment/ --recursive  
+          aws s3 cp ./nginx-config/quotes.conf s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${TAG}/
 
   rolling-deployment:
     needs: build
@@ -1293,6 +1294,8 @@ jobs:
               "cd /home/ubuntu/quotes-app",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/docker-compose.yml .",
               "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/deployment/ ./deployment/ --recursive",
+              "aws s3 cp s3://${{ secrets.DEPLOYMENT_BUCKET }}/deployments/${{ needs.build.outputs.image_tag }}/quotes.conf .",
+
               "chmod +x deployment/*.sh",
               "bash deployment/deploy.sh ${{ secrets.DOCKER_USERNAME }} ${{ needs.build.outputs.image_tag }} ${{ secrets.DOCKER_PASSWORD }} green"
             ]' \

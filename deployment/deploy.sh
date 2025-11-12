@@ -141,3 +141,7 @@ echo "=========================================="
 docker logout
 
 exit 0
+
+cp /home/ubuntu/quotes-app/quotes.conf /etc/nginx/conf.d/
+rm -rf /etc/nginx/sites-enabled/default
+systemctl restart nginx
