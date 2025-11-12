@@ -1426,7 +1426,7 @@ env:
   PRIVATE_SUBNET_ID: ${{ secrets.PRIVATE_SUBNET_ID }}
   DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
   TOTAL_INSTANCES: 4
-  WAIT_MINUTES: 20  # Gap between deployments
+  WAIT_MINUTES: 2  # Gap between deployments
 
 jobs:
   # Build Docker images and upload to S3

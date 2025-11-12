@@ -90,57 +90,10 @@ docker-compose up -d || exit 1
 echo "Waiting for containers to start..."
 sleep 30
 
-# Health check
-echo "Performing health check..."
-MAX_ATTEMPTS=30
-ATTEMPT=0
-
-while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    ATTEMPT=$((ATTEMPT + 1))
-    
-    # Check if containers are running
-    RUNNING_CONTAINERS=$(docker-compose ps --services --filter "status=running" | wc -l)
-    TOTAL_CONTAINERS=$(docker-compose ps --services | wc -l)
-    
-    echo "Attempt $ATTEMPT/$MAX_ATTEMPTS - Running: $RUNNING_CONTAINERS/$TOTAL_CONTAINERS"
-    
-    if [ $RUNNING_CONTAINERS -eq $TOTAL_CONTAINERS ]; then
-        # Check if app is responding on port 80
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80 || echo "000")
-        
-        if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✅ Health check passed! Application is responding on port 80"
-            break
-        else
-            echo "⏳ HTTP status: $HTTP_STATUS, waiting..."
-        fi
-    fi
-    
-    if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
-        echo "❌ Health check failed after $MAX_ATTEMPTS attempts"
-        echo "Container status:"
-        docker-compose ps
-        echo "Container logs:"
-        docker-compose logs --tail=50
-        exit 1
-    fi
-    
-    sleep 10
-done
 
 # Final verification
-echo "Final verification..."
-docker-compose ps
 
-echo "=========================================="
-echo "✅ Deployment completed successfully at $(date)"
-echo "Image Tag: $IMAGE_TAG"
-echo "=========================================="
 
-# Logout from Docker
-docker logout
-
-exit 0
 
 cp /home/ubuntu/quotes-app/quotes.conf /etc/nginx/conf.d/
 rm -rf /etc/nginx/sites-enabled/default
