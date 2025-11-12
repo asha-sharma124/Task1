@@ -108,8 +108,8 @@ jobs:
     steps:
       - name: Approval gate
         run: |
-          echo "✅ All 4 instances deployed with new code"
-          echo "⏳ Manual approval required for final cutover"
+          echo " All 4 instances deployed with new code"
+          echo " approval required for final cutover"
 
   complete-deployment:
     needs: [build, approve-deployment]
@@ -202,7 +202,7 @@ jobs:
           aws elbv2 modify-listener \
             --listener-arn ${{ secrets.ALB_LISTENER_ARN }} \
             --default-actions Type=forward,TargetGroupArn=${{ secrets.BLUE_TARGET_GROUP_ARN }}
-          sleep 2
+          sleep 10
           echo "✅ Listener now points to blue TG"
 
       - name: Cleanup green target group
