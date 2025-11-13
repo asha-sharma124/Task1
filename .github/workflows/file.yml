@@ -1,0 +1,328 @@
+name: Production ASG Progressive Canary Deployment
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-south-1
+  OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}       # To be updated dynamically after deployment
+  OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}           # To be updated dynamically after deployment
+  ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
+  LAUNCH_TEMPLATE_ID: ${{ secrets.LAUNCH_TEMPLATE_ID }}
+  PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_ID }}  # Comma-separated list
+  DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
+  SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
+  TOTAL_INSTANCES: 4
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.image_tag }}
+      launch_template_version: ${{ steps.create_lt_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set image tag
+        id: set_tag
+        run: |
+          TAG=$(date +'%Y%m%d%H%M%S')
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+         
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker images
+        run: |
+          TAG=${{ steps.set_tag.outputs.image_tag }}
+          echo "🏗️ Building images with tag: $TAG"
+          
+          for service in db api app; do
+            IMAGE_NAME="${{ secrets.DOCKER_USERNAME }}/quotes-${service}"
+            echo "Building $service..."
+            docker build --no-cache -t $IMAGE_NAME:${TAG} -t $IMAGE_NAME:latest $GITHUB_WORKSPACE/$service
+            docker push $IMAGE_NAME:${TAG}
+            docker push $IMAGE_NAME:latest
+          done
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload deployment files to S3
+        run: |
+          TAG=${{ steps.set_tag.outputs.image_tag }}
+          
+          sed -i "s|build: ./db|image: ${{ secrets.DOCKER_USERNAME }}/quotes-db:${TAG}|g" docker-compose.yml
+          sed -i "s|build: ./api|image: ${{ secrets.DOCKER_USERNAME }}/quotes-api:${TAG}|g" docker-compose.yml
+          sed -i "s|build: ./app|image: ${{ secrets.DOCKER_USERNAME }}/quotes-app:${TAG}|g" docker-compose.yml
+
+          aws s3 cp docker-compose.yml s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
+          aws s3 cp deployment/ s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/deployment/ --recursive
+          aws s3 cp ./nginx-config/quotes.conf s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
+
+          echo "✅ Deployment files uploaded to S3"
+
+      - name: Create new Launch Template version with env setup and deploy
+        id: create_lt_version
+        run: |
+          TAG=${{ steps.set_tag.outputs.image_tag }}
+          
+          cat > user-data.sh <<'EOF'
+          #!/bin/bash
+          set -ex
+
+          # Update and install packages
+          sudo yum update -y
+          sudo amazon-linux-extras install -y docker
+          sudo yum install -y nginx amazon-ssm-agent
+          sudo systemctl enable docker nginx amazon-ssm-agent
+          sudo systemctl start docker nginx amazon-ssm-agent
+
+          # Install Docker Compose v2
+          DOCKER_COMPOSE_VERSION=2.12.2
+          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
+
+          # Prepare app directory
+          APP_DIR=/home/ec2-user/quotes-app
+          sudo mkdir -p $APP_DIR/deployment
+          sudo chown -R ec2-user:ec2-user $APP_DIR
+
+          # Download deployment files from S3 (replace placeholders below)
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION}
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION}
+          sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION}
+
+          sudo chown -R ec2-user:ec2-user $APP_DIR
+          sudo chmod +x $APP_DIR/deployment/*.sh
+
+          # Start and enable nginx
+          sudo systemctl enable nginx
+          sudo systemctl start nginx
+
+          # Deploy and run containers via Docker Compose
+          cd $APP_DIR
+          sudo -u ec2-user docker-compose down || true
+          sudo -u ec2-user docker-compose pull
+          sudo -u ec2-user docker-compose up -d
+
+          # Reload nginx to apply new config
+          sudo systemctl reload nginx
+
+          EOF
+
+          sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
+          sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
+          sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
+
+          NEW_VERSION=$(aws ec2 create-launch-template-version \
+            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
+            --source-version '$Latest' \
+            --launch-template-data "{
+              \"UserData\": \"$(base64 -w 0 user-data.sh)\",
+              \"TagSpecifications\": [{
+                \"ResourceType\": \"instance\",
+                \"Tags\": [
+                  {\"Key\": \"Name\", \"Value\": \"quotes-app-green\"},
+                  {\"Key\": \"Environment\", \"Value\": \"green\"},
+                  {\"Key\": \"DeploymentBatch\", \"Value\": \"${TAG}\"}
+                ]
+              }]
+            }" \
+            --query 'LaunchTemplateVersion.VersionNumber' \
+            --output text)
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Created Launch Template version: $NEW_VERSION"
+
+  create-new-infrastructure:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      new_asg_name: ${{ steps.create-asg.outputs.asg_name }}
+      new_tg_arn: ${{ steps.create-tg.outputs.tg_arn }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create new Target Group
+        id: create-tg
+        run: |
+          TG_NAME="tg-${{ github.run_number }}-${{ env.APP_NAME }}"
+          TG_ARN=$(aws elbv2 create-target-group \
+            --name $TG_NAME \
+            --protocol HTTP \
+            --port 80 \
+            --vpc-id ${{ secrets.VPC_ID }} \
+            --health-check-path /health \
+            --health-check-interval-seconds 30 \
+            --health-check-timeout-seconds 5 \
+            --healthy-threshold-count 2 \
+            --unhealthy-threshold-count 3 \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text)
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          echo "Created Target Group: $TG_NAME"
+
+      - name: Create new Auto Scaling Group
+        id: create-asg
+        run: |
+          ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
+          aws autoscaling create-auto-scaling-group \
+            --auto-scaling-group-name $ASG_NAME \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ steps.build_lt_version.outputs.version }} \
+            --min-size 1 \
+            --max-size 4 \
+            --desired-capacity 1 \
+            --target-group-arns ${{ steps.create-tg.outputs.tg_arn }} \
+            --vpc-zone-identifier "${{ env.PRIVATE_SUBNET_IDS }}" \
+            --health-check-type ELB \
+            --health-check-grace-period 300 \
+            --termination-policies "OldestInstance" \
+            --tags "Key=Name,Value=$ASG_NAME" "Key=Environment,Value=green" "Key=DeploymentBatch,Value=${{ steps.set_tag.outputs.image_tag }}"
+          echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
+          echo "Created ASG: $ASG_NAME"
+
+      - name: Wait for first instance to be healthy
+        run: |
+          echo "Waiting for healthy instance in New Target Group..."
+          for i in {1..40}; do
+            HEALTHY=$(aws elbv2 describe-target-health --target-group-arn ${{ steps.create-tg.outputs.tg_arn }} --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)
+            if [ "$HEALTHY" -ge 1 ]; then
+              echo "Instance healthy!"
+              break
+            fi
+            echo "Attempt $i/40 - Healthy instances: $HEALTHY"
+            sleep 30
+          done
+          if [ "$HEALTHY" -lt 1 ]; then
+            echo "No healthy instances - failing deployment!"
+            exit 1
+          fi
+
+      - name: Set initial traffic split 80% old TG, 20% new TG
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            --default-actions Type=forward,ForwardConfig="{
+              TargetGroups:[
+                {TargetGroupArn='${{ env.OLD_TG_ARN }}',Weight=80},
+                {TargetGroupArn='${{ steps.create-tg.outputs.tg_arn }}',Weight=20}
+              ],
+              TargetGroupStickinessConfig={Enabled:false}
+            }"
+          echo "Traffic split set to 80% old, 20% new"
+
+  qa-approval:
+    needs: create-new-infrastructure
+    runs-on: ubuntu-latest
+    environment:
+      name: qa-approval
+    steps:
+      - run: |
+          echo "QA testing period: 20 mins"
+          sleep 1200
+
+  progressive-rollout:
+    needs: [create-new-infrastructure, qa-approval]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Iteration 1 - Scale new ASG to 2 and update traffic 50/50
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ needs.create-new-infrastructure.outputs.new_asg_name }} --desired-capacity 2
+          sleep 180
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} --default-actions Type=forward,ForwardConfig="{
+            TargetGroups:[
+              {TargetGroupArn='${{ env.OLD_TG_ARN }}',Weight=50},
+              {TargetGroupArn='${{ needs.create-new-infrastructure.outputs.new_tg_arn }}',Weight=50}
+            ]
+          }"
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ env.OLD_ASG_NAME }} --desired-capacity 3
+
+      - name: Wait and monitor
+        run: sleep 300
+
+      - name: Iteration 2 - Scale new ASG to 3 and update traffic 60/40
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ needs.create-new-infrastructure.outputs.new_asg_name }} --desired-capacity 3
+          sleep 180
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} --default-actions Type=forward,ForwardConfig="{
+            TargetGroups:[
+              {TargetGroupArn='${{ env.OLD_TG_ARN }}',Weight=40},
+              {TargetGroupArn='${{ needs.create-new-infrastructure.outputs.new_tg_arn }}',Weight=60}
+            ]
+          }"
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ env.OLD_ASG_NAME }} --desired-capacity 2
+
+      - name: Wait and monitor
+        run: sleep 300
+
+      - name: Iteration 3 - Scale new ASG to 4 and update traffic 80/20
+        run: |
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ needs.create-new-infrastructure.outputs.new_asg_name }} --desired-capacity 4
+          sleep 180
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} --default-actions Type=forward,ForwardConfig="{
+            TargetGroups:[
+              {TargetGroupArn='${{ env.OLD_TG_ARN }}',Weight=20},
+              {TargetGroupArn='${{ needs.create-new-infrastructure.outputs.new_tg_arn }}',Weight=80}
+            ]
+          }"
+          aws autoscaling set-desired-capacity --auto-scaling-group-name ${{ env.OLD_ASG_NAME }} --desired-capacity 1
+
+      - name: Wait and monitor
+        run: sleep 300
+
+      - name: Final Cutover - 100% to new ASG
+        run: |
+          aws elbv2 modify-listener --listener-arn ${{ env.ALB_LISTENER_ARN }} --default-actions Type=forward,TargetGroupArn=${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+          sleep 60
+          aws autoscaling update-auto-scaling-group --auto-scaling-group-name ${{ env.OLD_ASG_NAME }} --min-size 0 --desired-capacity 0
+          aws autoscaling delete-auto-scaling-group --auto-scaling-group-name ${{ env.OLD_ASG_NAME }} --force-delete
+          aws elbv2 delete-target-group --target-group-arn ${{ env.OLD_TG_ARN }}
+
+  update-secrets:
+    needs: progressive-rollout
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update OLD_ASG_NAME secret
+        uses: peter-evans/create-or-update-secret@v1
+        with:
+          secret-name: OLD_ASG_NAME
+          secret-value: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
+          repository: ${{ github.repository }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update OLD_TG_ARN secret
+        uses: peter-evans/create-or-update-secret@v1
+        with:
+          secret-name: OLD_TG_ARN
+          secret-value: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+          repository: ${{ github.repository }}
+          token: ${{ secrets.GH_PAT }}
+
+# Note: GH_PAT is a personal access token stored in your repo secrets with repo and admin:repo_hook scopes
