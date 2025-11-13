@@ -8,11 +8,11 @@ on:
 env:
   AWS_REGION: ap-south-1
   APP_NAME: quotes-app
-  OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}       # To be updated dynamically after deployment
-  OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}           # To be updated dynamically after deployment
+  OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}       # Updated dynamically after deployment
+  OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}           # Updated dynamically after deployment
   ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
   LAUNCH_TEMPLATE_ID: ${{ secrets.LAUNCH_TEMPLATE_ID }}
-  PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_ID }}  # Comma-separated list
+  PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }} # Corrected plural key; comma-separated list expected
   DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
   SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
   TOTAL_INSTANCES: 4
@@ -103,7 +103,7 @@ jobs:
           sudo mkdir -p $APP_DIR/deployment
           sudo chown -R ec2-user:ec2-user $APP_DIR
 
-          # Download deployment files from S3 (replace placeholders below)
+          # Download deployment files from S3 (placeholders replaced)
           aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION}
           aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION}
           sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION}
@@ -150,9 +150,6 @@ jobs:
             --query 'LaunchTemplateVersion.VersionNumber' \
             --output text)
 
-        
-
-
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "✅ Created Launch Template version: $NEW_VERSION"
 
@@ -175,10 +172,10 @@ jobs:
         run: |
           TG_NAME="tg-${{ github.run_number }}-${{ env.APP_NAME }}"
           TG_ARN=$(aws elbv2 create-target-group \
-            --name $TG_NAME \
+            --name "$TG_NAME" \
             --protocol HTTP \
             --port 80 \
-            --vpc-id ${{ secrets.VPC_ID }} \
+            --vpc-id "${{ secrets.VPC_ID }}" \
             --health-check-path /health \
             --health-check-interval-seconds 30 \
             --health-check-timeout-seconds 5 \
@@ -194,17 +191,17 @@ jobs:
         run: |
           ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
           aws autoscaling create-auto-scaling-group \
-            --auto-scaling-group-name $ASG_NAME \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ steps.build_lt_version.outputs.version }} \
+            --auto-scaling-group-name "$ASG_NAME" \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.build.outputs.launch_template_version }} \
             --min-size 1 \
             --max-size 4 \
             --desired-capacity 1 \
-            --target-group-arns ${{ steps.create-tg.outputs.tg_arn }} \
-            --vpc-zone-identifier "${{ env.PRIVATE_SUBNET_IDS }}" \
+            --target-group-arns "${{ steps.create-tg.outputs.tg_arn }}" \
+            --vpc-zone-identifier "${{ secrets.PRIVATE_SUBNET_IDS }}" \
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
-            --tags "Key=Name,Value=$ASG_NAME" "Key=Environment,Value=green" "Key=DeploymentBatch,Value=${{ steps.set_tag.outputs.image_tag }}"
+            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ steps.set_tag.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
 
@@ -332,4 +329,6 @@ jobs:
           repository: ${{ github.repository }}
           token: ${{ secrets.GH_PAT }}
 
-# Note: GH_PAT is a personal access token stored in your repo secrets with repo and admin:repo_hook scopes
+# Note:
+# - GH_PAT is a GitHub Personal Access Token with repo and admin:repo_hook scopes set as a secret.
+# - Ensure all required secrets (VPC_ID, LAUNCH_TEMPLATE_ID, DEPLOYMENT_BUCKET, etc.) are defined properly.
