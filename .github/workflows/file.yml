@@ -126,9 +126,12 @@ jobs:
 
           EOF
 
+          # Replace placeholders in user-data.sh
           sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
           sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
           sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
+          sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
+          sed -i "s|\${DOCKER_PASSWORD}|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
 
           NEW_VERSION=$(aws ec2 create-launch-template-version \
             --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
@@ -146,6 +149,9 @@ jobs:
             }" \
             --query 'LaunchTemplateVersion.VersionNumber' \
             --output text)
+
+        
+
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "✅ Created Launch Template version: $NEW_VERSION"
