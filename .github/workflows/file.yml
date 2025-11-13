@@ -107,10 +107,12 @@ jobs:
           sudo systemctl start docker >> $LOG_FILE 2>&1
 
           echo "Installing Docker Compose v2..." | tee -a $LOG_FILE
-          DOCKER_COMPOSE_VERSION=2.12.2
-          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose >> $LOG_FILE 2>&1
-          sudo chmod +x /usr/local/bin/docker-compose
-          sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
+          # Remove old docker-compose binary if any
+          sudo rm -f /usr/local/bin/docker-compose /usr/bin/docker-compose
+
+          # Install Docker Compose v2 plugin:
+          sudo apt-get install -y docker-compose-plugin
+
 
           echo "Installing nginx..." | tee -a $LOG_FILE
           sudo apt-get install -y nginx >> $LOG_FILE 2>&1
