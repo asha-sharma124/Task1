@@ -85,70 +85,70 @@ jobs:
           #!/bin/bash
           set -ex
 
-          # Update and install packages
-          sudo yum update -y
-          sudo amazon-linux-extras install -y docker
-          sudo yum install -y nginx amazon-ssm-agent
-          sudo systemctl enable docker nginx amazon-ssm-agent
-          sudo systemctl start docker nginx amazon-ssm-agent
+          # Update and upgrade packages
+          sudo apt-get update -y
+          sudo apt-get upgrade -y
+
+          # Install dependencies for Docker
+          sudo apt-get install -y \
+              apt-transport-https \
+              ca-certificates \
+              curl \
+              software-properties-common \
+              gnupg-agent
+
+          # Add Docker's official GPG key and repo
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+          sudo add-apt-repository \
+            "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu \
+            $(lsb_release -cs) stable"
+
+          # Install Docker Engine
+          sudo apt-get update -y
+          sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+
+          # Enable and start Docker
+          sudo systemctl enable docker
+          sudo systemctl start docker
 
           # Install Docker Compose v2
           DOCKER_COMPOSE_VERSION=2.12.2
-          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
           sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
 
-          # Prepare app directory
-          APP_DIR=/home/ec2-user/quotes-app
-          sudo mkdir -p $APP_DIR/deployment
-          sudo chown -R ec2-user:ec2-user $APP_DIR
+          # Install nginx
+          sudo apt-get install -y nginx
+          sudo systemctl enable nginx
+          sudo systemctl start nginx
 
-          # Download deployment files from S3 (placeholders replaced)
+          # Install AWS SSM agent (Ubuntu official package)
+          curl "https://s3.${AWS_REGION}.amazonaws.com/amazon-ssm-${AWS_REGION}/latest/debian_amd64/amazon-ssm-agent.deb" -o "amazon-ssm-agent.deb"
+          sudo dpkg -i amazon-ssm-agent.deb
+          sudo systemctl enable amazon-ssm-agent
+          sudo systemctl start amazon-ssm-agent
+
+          # Prepare app directory
+          APP_DIR=/home/ubuntu/quotes-app
+          sudo mkdir -p $APP_DIR/deployment
+          sudo chown -R ubuntu:ubuntu $APP_DIR
+
+          # Download deployment files from S3 (placeholders replaced before this script runs)
           aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION}
           aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION}
           sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION}
 
-          sudo chown -R ec2-user:ec2-user $APP_DIR
+          sudo chown -R ubuntu:ubuntu $APP_DIR
           sudo chmod +x $APP_DIR/deployment/*.sh
 
-          # Start and enable nginx
-          sudo systemctl enable nginx
-          sudo systemctl start nginx
-
-          # Deploy and run containers via Docker Compose
+          # Deploy and run containers via Docker Compose as ubuntu user
           cd $APP_DIR
-          sudo -u ec2-user docker-compose down || true
-          sudo -u ec2-user docker-compose pull
-          sudo -u ec2-user docker-compose up -d
+          sudo -u ubuntu docker-compose down || true
+          sudo -u ubuntu docker-compose pull
+          sudo -u ubuntu docker-compose up -d
 
           # Reload nginx to apply new config
           sudo systemctl reload nginx
-
-          EOF
-
-          # Replace placeholders in user-data.sh
-          sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
-          sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
-          sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
-          sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
-          sed -i "s|\${DOCKER_PASSWORD}|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
-
-          NEW_VERSION=$(aws ec2 create-launch-template-version \
-            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
-            --source-version '$Latest' \
-            --launch-template-data "{
-              \"UserData\": \"$(base64 -w 0 user-data.sh)\",
-              \"TagSpecifications\": [{
-                \"ResourceType\": \"instance\",
-                \"Tags\": [
-                  {\"Key\": \"Name\", \"Value\": \"quotes-app-green\"},
-                  {\"Key\": \"Environment\", \"Value\": \"green\"},
-                  {\"Key\": \"DeploymentBatch\", \"Value\": \"${TAG}\"}
-                ]
-              }]
-            }" \
-            --query 'LaunchTemplateVersion.VersionNumber' \
-            --output text)
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "✅ Created Launch Template version: $NEW_VERSION"
