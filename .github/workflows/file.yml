@@ -85,90 +85,69 @@ jobs:
           #!/bin/bash
           set -ex
 
-          # Update and upgrade packages
-          sudo apt-get update -y
-          sudo apt-get upgrade -y
+          LOG_FILE=/var/log/user-data.log
 
-          # Install dependencies for Docker
-          sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg-agent
+          echo "Starting system update..." | tee -a $LOG_FILE
+          sudo apt-get update -y >> $LOG_FILE 2>&1
+          sudo apt-get upgrade -y >> $LOG_FILE 2>&1
 
-          # Add Docker's official GPG key and repo
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-          sudo add-apt-repository "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+          echo "Installing docker prerequisites..." | tee -a $LOG_FILE
+          sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg-agent >> $LOG_FILE 2>&1
 
-          # Install Docker Engine
-          sudo apt-get update -y
-          sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+          echo "Adding Docker GPG key and repo..." | tee -a $LOG_FILE
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add - >> $LOG_FILE 2>&1
+          sudo add-apt-repository \
+            "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu \
+            $(lsb_release -cs) stable" >> $LOG_FILE 2>&1
 
-          # Enable and start Docker
-          sudo systemctl enable docker
-          sudo systemctl start docker
+          echo "Installing Docker engine..." | tee -a $LOG_FILE
+          sudo apt-get update -y >> $LOG_FILE 2>&1
+          sudo apt-get install -y docker-ce docker-ce-cli containerd.io >> $LOG_FILE 2>&1
+          sudo systemctl enable docker >> $LOG_FILE 2>&1
+          sudo systemctl start docker >> $LOG_FILE 2>&1
 
-          # Install Docker Compose v2
+          echo "Installing Docker Compose v2..." | tee -a $LOG_FILE
           DOCKER_COMPOSE_VERSION=2.12.2
-          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" -o /usr/local/bin/docker-compose >> $LOG_FILE 2>&1
           sudo chmod +x /usr/local/bin/docker-compose
           sudo ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
 
-          # Install nginx
-          sudo apt-get install -y nginx
+          echo "Installing nginx..." | tee -a $LOG_FILE
+          sudo apt-get install -y nginx >> $LOG_FILE 2>&1
           sudo systemctl enable nginx
           sudo systemctl start nginx
 
-          # Install AWS SSM agent (Ubuntu official package)
-          curl "https://s3.${AWS_REGION}.amazonaws.com/amazon-ssm-${AWS_REGION}/latest/debian_amd64/amazon-ssm-agent.deb" -o "amazon-ssm-agent.deb"
-          sudo dpkg -i amazon-ssm-agent.deb
+          echo "Installing AWS SSM agent..." | tee -a $LOG_FILE
+          curl "https://s3.${AWS_REGION}.amazonaws.com/amazon-ssm-${AWS_REGION}/latest/debian_amd64/amazon-ssm-agent.deb" -o amazon-ssm-agent.deb >> $LOG_FILE 2>&1
+          sudo dpkg -i amazon-ssm-agent.deb >> $LOG_FILE 2>&1 || true
           sudo systemctl enable amazon-ssm-agent
           sudo systemctl start amazon-ssm-agent
 
-          # Prepare app directory
+          echo "Creating app directory..." | tee -a $LOG_FILE
           APP_DIR=/home/ubuntu/quotes-app
           sudo mkdir -p $APP_DIR/deployment
           sudo chown -R ubuntu:ubuntu $APP_DIR
+          echo "App directory created at $APP_DIR" | tee -a $LOG_FILE
 
-          # Download deployment files from S3 (placeholders replaced before this script runs)
-          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION}
-          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION}
-          sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION}
+          echo "Downloading deployment files from S3..." | tee -a $LOG_FILE
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION} >> $LOG_FILE 2>&1
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION} >> $LOG_FILE 2>&1
+          sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION} >> $LOG_FILE 2>&1
 
           sudo chown -R ubuntu:ubuntu $APP_DIR
           sudo chmod +x $APP_DIR/deployment/*.sh
 
-          # Deploy and run containers via Docker Compose as ubuntu user
+          echo "Deploying docker-compose app..." | tee -a $LOG_FILE
           cd $APP_DIR
-          sudo -u ubuntu docker-compose down || true
-          sudo -u ubuntu docker-compose pull
-          sudo -u ubuntu docker-compose up -d
+          sudo -u ubuntu docker-compose down || true >> $LOG_FILE 2>&1
+          sudo -u ubuntu docker-compose pull >> $LOG_FILE 2>&1
+          sudo -u ubuntu docker-compose up -d >> $LOG_FILE 2>&1
 
-          # Reload nginx to apply new config
-          sudo systemctl reload nginx
-          EOF
+          echo "Reloading nginx..." | tee -a $LOG_FILE
+          sudo systemctl reload nginx >> $LOG_FILE 2>&1
 
-          sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
-          sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
-          sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
-          sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
-          sed -i "s|\${DOCKER_PASSWORD}|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
+          echo "User data script completed successfully" | tee -a $LOG_FILE
 
-          NEW_VERSION=$(aws ec2 create-launch-template-version \
-            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
-            --source-version '$Latest' \
-            --launch-template-data "{
-              \"UserData\": \"$(base64 -w 0 user-data.sh)\",
-              \"TagSpecifications\": [{
-                \"ResourceType\": \"instance\",
-                \"Tags\": [
-                  {\"Key\": \"Name\", \"Value\": \"quotes-app-green\"},
-                  {\"Key\": \"Environment\", \"Value\": \"green\"},
-                  {\"Key\": \"DeploymentBatch\", \"Value\": \"${TAG}\"}
-                ]
-              }]
-            }" \
-            --query 'LaunchTemplateVersion.VersionNumber' \
-            --output text)
-
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Created Launch Template version: $NEW_VERSION"
 
   create-new-infrastructure:
     needs: build
