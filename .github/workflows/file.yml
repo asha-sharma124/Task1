@@ -12,7 +12,7 @@ env:
   OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}           # Updated dynamically after deployment
   ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
   LAUNCH_TEMPLATE_ID: ${{ secrets.LAUNCH_TEMPLATE_ID }}
-  PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }} # Corrected plural key; comma-separated list expected
+  PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}  # Ensure plural and comma-separated
   DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
   SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
   TOTAL_INSTANCES: 4
@@ -90,18 +90,11 @@ jobs:
           sudo apt-get upgrade -y
 
           # Install dependencies for Docker
-          sudo apt-get install -y \
-              apt-transport-https \
-              ca-certificates \
-              curl \
-              software-properties-common \
-              gnupg-agent
+          sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common gnupg-agent
 
           # Add Docker's official GPG key and repo
           curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-          sudo add-apt-repository \
-            "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu \
-            $(lsb_release -cs) stable"
+          sudo add-apt-repository "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
 
           # Install Docker Engine
           sudo apt-get update -y
@@ -149,6 +142,30 @@ jobs:
 
           # Reload nginx to apply new config
           sudo systemctl reload nginx
+          EOF
+
+          sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
+          sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
+          sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
+          sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
+          sed -i "s|\${DOCKER_PASSWORD}|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
+
+          NEW_VERSION=$(aws ec2 create-launch-template-version \
+            --launch-template-id ${{ env.LAUNCH_TEMPLATE_ID }} \
+            --source-version '$Latest' \
+            --launch-template-data "{
+              \"UserData\": \"$(base64 -w 0 user-data.sh)\",
+              \"TagSpecifications\": [{
+                \"ResourceType\": \"instance\",
+                \"Tags\": [
+                  {\"Key\": \"Name\", \"Value\": \"quotes-app-green\"},
+                  {\"Key\": \"Environment\", \"Value\": \"green\"},
+                  {\"Key\": \"DeploymentBatch\", \"Value\": \"${TAG}\"}
+                ]
+              }]
+            }" \
+            --query 'LaunchTemplateVersion.VersionNumber' \
+            --output text)
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "✅ Created Launch Template version: $NEW_VERSION"
@@ -234,6 +251,8 @@ jobs:
               TargetGroupStickinessConfig={Enabled:false}
             }"
           echo "Traffic split set to 80% old, 20% new"
+
+# Add your qa-approval, progressive-rollout, and update-secrets jobs as before here...
 
   qa-approval:
     needs: create-new-infrastructure
