@@ -145,6 +145,7 @@ jobs:
           # Verify installation
           aws --version
 
+          sudo usermod -aG docker ubuntu
 
           echo "Creating app directory..." | tee -a $LOG_FILE
           APP_DIR=/home/ubuntu/quotes-app
