@@ -257,15 +257,30 @@ jobs:
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
-          aws elbv2 modify-listener \
-            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
-            --default-actions Type=forward,ForwardConfig="{
-              TargetGroups:[
-                {TargetGroupArn='${{ env.OLD_TG_ARN }}',Weight=80},
-                {TargetGroupArn='${{ steps.create-tg.outputs.tg_arn }}',Weight=20}
-              ],
-              TargetGroupStickinessConfig={Enabled:false}
-            }"
+         aws elbv2 modify-listener \
+          --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+          --default-actions '[
+            {
+              "Type": "forward",
+              "ForwardConfig": {
+                "TargetGroups": [
+                  {
+                    "TargetGroupArn": "${{ env.OLD_TG_ARN }}",
+                    "Weight": 80
+                  },
+                  {
+                    "TargetGroupArn": "${{ steps.create-tg.outputs.tg_arn }}",
+                    "Weight": 20
+                  }
+                ],
+                "TargetGroupStickinessConfig": {
+                  "Enabled": false
+                }
+              }
+            }
+          ]'
+        echo "Traffic split set to 80% old, 20% new"
+
           echo "Traffic split set to 80% old, 20% new"
 
 # Add your qa-approval, progressive-rollout, and update-secrets jobs as before here...
