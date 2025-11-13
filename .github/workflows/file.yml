@@ -118,10 +118,17 @@ jobs:
           sudo systemctl start nginx
 
           echo "Installing AWS SSM agent..." | tee -a $LOG_FILE
-          wget https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
-          sudo dpkg -i amazon-ssm-agent.deb >> $LOG_FILE 2>&1 || true
-          sudo systemctl enable amazon-ssm-agent
-          sudo systemctl start amazon-ssm-agent
+          if ! command -v snap >/dev/null 2>&1 || ! snap list amazon-ssm-agent >/dev/null 2>&1; then
+            echo "Installing Amazon SSM Agent via .deb package"
+            curl "https://s3.${AWS_REGION}.amazonaws.com/amazon-ssm-${AWS_REGION}/latest/debian_amd64/amazon-ssm-agent.deb" -o "amazon-ssm-agent.deb"
+            sudo dpkg -i amazon-ssm-agent.deb || sudo apt-get install -f -y
+            sudo systemctl enable amazon-ssm-agent
+            sudo systemctl start amazon-ssm-agent
+          else
+            echo "Amazon SSM Agent already installed via snap, skipping .deb install"
+            sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+            sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+          fi
 
           echo "Creating app directory..." | tee -a $LOG_FILE
           APP_DIR=/home/ubuntu/quotes-app
