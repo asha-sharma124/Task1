@@ -129,6 +129,22 @@ jobs:
             sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
             sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
           fi
+          # Update package index and install prerequisites
+          sudo apt-get update -y
+          sudo apt-get install -y unzip curl
+
+          # Download the AWS CLI v2 installer zip
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
+          # Unzip the installer
+          unzip awscliv2.zip
+
+          # Run the install script
+          sudo ./aws/install
+
+          # Verify installation
+          aws --version
+
 
           echo "Creating app directory..." | tee -a $LOG_FILE
           APP_DIR=/home/ubuntu/quotes-app
