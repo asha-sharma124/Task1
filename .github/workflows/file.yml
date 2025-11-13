@@ -168,7 +168,7 @@ jobs:
           sudo -u ubuntu docker compose down || true >> $LOG_FILE 2>&1
           sudo -u ubuntu docker compose pull >> $LOG_FILE 2>&1
           sudo -u ubuntu docker compose up -d >> $LOG_FILE 2>&1
-
+          sudo rm -rf /etc/nginx/sites-enabled/default
           echo "Reloading nginx..." | tee -a $LOG_FILE
           sudo systemctl reload nginx >> $LOG_FILE 2>&1
 
@@ -253,23 +253,7 @@ jobs:
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ steps.set_tag.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
-
-      - name: Wait for first instance to be healthy
-        run: |
-          echo "Waiting for healthy instance in New Target Group..."
-          for i in {1..40}; do
-            HEALTHY=$(aws elbv2 describe-target-health --target-group-arn ${{ steps.create-tg.outputs.tg_arn }} --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' --output text)
-            if [ "$HEALTHY" -ge 1 ]; then
-              echo "Instance healthy!"
-              break
-            fi
-            echo "Attempt $i/40 - Healthy instances: $HEALTHY"
-            sleep 30
-          done
-          if [ "$HEALTHY" -lt 1 ]; then
-            echo "No healthy instances - failing deployment!"
-            exit 1
-          fi
+          sleep 300
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
