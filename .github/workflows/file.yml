@@ -7,6 +7,7 @@ on:
 
 env:
   AWS_REGION: ap-south-1
+  APP_NAME: quotes-app
   OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}       # To be updated dynamically after deployment
   OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}           # To be updated dynamically after deployment
   ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
