@@ -165,9 +165,9 @@ jobs:
 
           echo "Deploying docker-compose app..." | tee -a $LOG_FILE
           cd $APP_DIR
-          sudo -u ubuntu docker-compose down || true >> $LOG_FILE 2>&1
-          sudo -u ubuntu docker-compose pull >> $LOG_FILE 2>&1
-          sudo -u ubuntu docker-compose up -d >> $LOG_FILE 2>&1
+          sudo -u ubuntu docker compose down || true >> $LOG_FILE 2>&1
+          sudo -u ubuntu docker compose pull >> $LOG_FILE 2>&1
+          sudo -u ubuntu docker compose up -d >> $LOG_FILE 2>&1
 
           echo "Reloading nginx..." | tee -a $LOG_FILE
           sudo systemctl reload nginx >> $LOG_FILE 2>&1
