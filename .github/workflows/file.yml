@@ -608,7 +608,7 @@ jobs:
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
           echo "Created Target Group: tg_arn=$TG_ARN"
-
+          
       - name: Create new Auto Scaling Group
         id: create_asg
         run: |
@@ -646,7 +646,14 @@ jobs:
                     {
                       "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}",
                       "Weight": 20
-                    }  ]'
+                    }
+                  ],
+                  "TargetGroupStickinessConfig": {
+                    "Enabled": false
+                  }
+                }
+              }
+            ]'
           echo "Traffic split set to 80% old, 20% new"
           sleep 50
 
@@ -665,7 +672,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}
+      #NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
       OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
+      #NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
       ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
       MAX_NEW_CAPACITY: 5
     steps:
@@ -678,11 +687,11 @@ jobs:
 
       - name: Dynamic Traffic Shifting with Loop
         run: |
-          NEW_ASG_NAME="${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
-          NEW_TG_ARN="${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
           echo "NEW_ASG_NAME=${NEW_ASG_NAME}"
           echo "NEW_TG_ARN=${NEW_TG_ARN}"
-        
+          NEW_ASG_NAME="${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
+          NEW_TG_ARN="${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
+          #!/bin/bash
           set -e
         
           echo "========================================="
