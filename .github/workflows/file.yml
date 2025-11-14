@@ -635,7 +635,7 @@ jobs:
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
-          sleep 250
+          sleep 230
 
 
       - name: Set initial traffic split 80% old TG, 20% new TG
@@ -810,6 +810,7 @@ jobs:
             
             # Get current capacities
             OLD_CAPACITY=$(get_asg_capacity "$OLD_ASG_NAME")
+            
             NEW_CAPACITY=$(get_asg_capacity "$NEW_ASG_NAME")
             
             echo "Current capacities: Old ASG=$OLD_CAPACITY, New ASG=$NEW_CAPACITY"
@@ -856,10 +857,11 @@ jobs:
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$NEW_DESIRED"
             
-           sleep 240
+            sleep 240
             
             # Count healthy instances in both target groups
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
+            echo "NEW_TG_ARN='$NEW_TG_ARN'"
             NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
             
             echo "Healthy instances: Old TG=$OLD_HEALTHY, New TG=$NEW_HEALTHY"
