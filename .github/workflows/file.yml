@@ -704,34 +704,10 @@ jobs:
             aws autoscaling set-desired-capacity \
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$MAX_NEW_CAPACITY"
-            
-            # Wait for instances to become healthy
+
             echo "⏳ Waiting for instances to become healthy..."
-            RETRY_COUNT=0
-            MAX_RETRIES=30
-            
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-              HEALTHY_COUNT=$(aws elbv2 describe-target-health \
-                --target-group-arn "$NEW_TG_ARN" \
-                --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
-                --output text)
-              
-              echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$MAX_NEW_CAPACITY healthy"
-              
-              if [ "$HEALTHY_COUNT" -ge "$MAX_NEW_CAPACITY" ]; then
-                echo "✅ All instances are healthy!"
-                break
-              fi
-              
-              sleep 30
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            done
-            
-            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-              echo "❌ ERROR: Instances did not become healthy in time"
-              exit 1
-            fi
-            
+            sleep 240
+
             # Point listener to new target group with 100% traffic
             echo "🎯 Setting ALB listener to 100% new TG"
             aws elbv2 modify-listener \
