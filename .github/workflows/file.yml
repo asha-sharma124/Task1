@@ -1117,7 +1117,7 @@ jobs:
     environment:
       name: production-approval
     steps:
-      - run: echo "QA testing period: 20 mins"
+      - run: echo "QA testing period= 20 mins"
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
