@@ -1138,7 +1138,7 @@ jobs:
       - name: Dynamic Traffic Shifting with Loop
         run: |
           NEW_ASG_NAME="${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
-          NEW_TG_ARN="${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
+          NEW_TG_ARN=${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
 
           echo "NEW_ASG_NAME=$NEW_ASG_NAME"
           echo "NEW_TG_ARN=$NEW_TG_ARN"
@@ -1165,7 +1165,7 @@ jobs:
             echo "Setting ALB listener to 100% new TG"
             aws elbv2 modify-listener \
               --listener-arn "$ALB_LISTENER_ARN" \
-              --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
+              --default-actions Type=forward,TargetGroupArn=${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
 
             echo " First deployment completed successfully!"
             exit 0
