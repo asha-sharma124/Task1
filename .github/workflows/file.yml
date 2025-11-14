@@ -279,9 +279,9 @@ jobs:
               }
             }
           ]'
-        echo "Traffic split set to 80% old, 20% new"
-
           echo "Traffic split set to 80% old, 20% new"
+
+          
 
 # Add your qa-approval, progressive-rollout, and update-secrets jobs as before here...
 
