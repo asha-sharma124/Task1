@@ -625,6 +625,42 @@ jobs:
             --termination-policies "OldestInstance" \
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
+      - name: Set initial traffic split 80% old TG, 20% new TG
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            --default-actions '[
+              {
+                "Type": "forward",
+                "ForwardConfig": {
+                  "TargetGroups": [
+                    {
+                      "TargetGroupArn": "${{ env.OLD_TG_ARN }}",
+                      "Weight": 80
+                    },
+                    {
+                      "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}",
+                      "Weight": 20
+                    }
+                  ],
+                  "TargetGroupStickinessConfig": {
+                    "Enabled": false
+                  }
+                }
+              }
+            ]'
+          echo "Traffic split set to 80% old, 20% new"
+          sleep 50
+
+  qa-approval:
+    needs: create-new-infrastructure
+    runs-on: ubuntu-latest
+    environment:
+      name: production-approval
+    steps:
+      - run: |
+          echo "QA testing period: 20 mins"
+         
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
@@ -646,13 +682,15 @@ jobs:
 
       - name: Dynamic Traffic Shifting with Loop
         run: |
+          echo "NEW_ASG_NAME=${NEW_ASG_NAME}"
+          echo "NEW_TG_ARN=${NEW_TG_ARN}"
           #!/bin/bash
           set -e
-          echo "NEW TG ARN inside script: $NEW_TG_ARN"
+        
           echo "========================================="
           echo "Starting Dynamic Progressive Deployment"
           echo "========================================="
-
+          echo "NEW TG ARN inside script: $NEW_TG_ARN" 
           if [ -z "$OLD_ASG_NAME" ] || [ "$OLD_ASG_NAME" == "null" ] || [ -z "$OLD_TG_ARN" ] || [ "$OLD_TG_ARN" == "null" ]; then
             echo "First deployment detected - no old infrastructure to migrate from"
             echo "New ASG: $NEW_ASG_NAME"
