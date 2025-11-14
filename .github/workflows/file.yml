@@ -607,8 +607,6 @@ jobs:
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-          echo "tg-new -arn $TG_ARN"
-          echo "Created Target Group: $TG_NAME"
 
       - name: Create new Auto Scaling Group
         id: create_asg
@@ -627,44 +625,6 @@ jobs:
             --termination-policies "OldestInstance" \
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
-          echo "Created ASG: $ASG_NAME"
-          sleep 200
-      - name: Set initial traffic split 80% old TG, 20% new TG
-        run: |
-          aws elbv2 modify-listener \
-            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
-            --default-actions '[
-              {
-                "Type": "forward",
-                "ForwardConfig": {
-                  "TargetGroups": [
-                    {
-                      "TargetGroupArn": "${{ env.OLD_TG_ARN }}",
-                      "Weight": 80
-                    },
-                    {
-                      "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}",
-                      "Weight": 20
-                    }
-                  ],
-                  "TargetGroupStickinessConfig": {
-                    "Enabled": false
-                  }
-                }
-              }
-            ]'
-          echo "Traffic split set to 80% old, 20% new"
-          sleep 50
-
-  qa-approval:
-    needs: create-new-infrastructure
-    runs-on: ubuntu-latest
-    environment:
-      name: production-approval
-    steps:
-      - run: |
-          echo "QA testing period: 20 mins"
-         
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
@@ -676,7 +636,6 @@ jobs:
       NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
       ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
       MAX_NEW_CAPACITY: 5
-      AWS_REGION: ${{ secrets.AWS_REGION }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -689,7 +648,7 @@ jobs:
         run: |
           #!/bin/bash
           set -e
-
+          echo "NEW TG ARN inside script: $NEW_TG_ARN"
           echo "========================================="
           echo "Starting Dynamic Progressive Deployment"
           echo "========================================="
