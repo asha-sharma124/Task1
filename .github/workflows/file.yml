@@ -503,7 +503,7 @@ jobs:
         OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
         NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
         ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
-        MAX_NEW_CAPACITY: ${{ env.TOTAL_INSTANCES }}
+        MAX_NEW_CAPACITY: 5
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
