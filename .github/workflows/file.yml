@@ -607,12 +607,8 @@ jobs:
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
 
-          if [ -z "$TG_ARN" ]; then
-          echo "Error: Failed to create Target Group or retrieve ARN."
-          exit 1
-          else
-            echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-          fi      
+          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          
           echo "Created Target Group: tg_arn=$TG_ARN"
           
       - name: Create new Auto Scaling Group
@@ -671,10 +667,6 @@ jobs:
     steps:
       - run: |
           echo "QA testing period: 20 mins"
-
-          echo "Job Output new_tg_arn: '${{ needs.create-new-infrastructure.outputs.new_tg_arn }}'"
-          echo "Job Output new_asg_name: '${{ needs.create-new-infrastructure.outputs.new_asg_name }}'"
-
          
 
   progressive-rollout:
@@ -682,9 +674,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}
-      #NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
+      NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
       OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
-      #NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+      NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
       ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
       MAX_NEW_CAPACITY: 5
     steps:
@@ -694,17 +686,11 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Debug job outputs
-        run: |
-          echo "Job Output new_tg_arn: '${{ needs.create-new-infrastructure.outputs.new_tg_arn }}'"
-          echo "Job Output new_asg_name: '${{ needs.create-new-infrastructure.outputs.new_asg_name }}'"
 
       - name: Dynamic Traffic Shifting with Loop
         run: |
           echo "NEW_ASG_NAME=${NEW_ASG_NAME}"
           echo "NEW_TG_ARN=${NEW_TG_ARN}"
-          NEW_ASG_NAME="${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
-          NEW_TG_ARN="${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
        
           set -e
         
@@ -727,7 +713,7 @@ jobs:
             echo "Setting ALB listener to 100% new TG"
             aws elbv2 modify-listener \
               --listener-arn "$ALB_LISTENER_ARN" \
-              --default-actions Type=forward,TargetGroupArn=${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+              --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
 
             echo " First deployment completed successfully!"
             exit 0
@@ -769,7 +755,7 @@ jobs:
             if [ "$OLD_WEIGHT" -eq 0 ]; then
               aws elbv2 modify-listener \
                 --listener-arn "$ALB_LISTENER_ARN" \
-                --default-actions Type=forward,TargetGroupArn=${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+                --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
             elif [ "$NEW_WEIGHT" -eq 0 ]; then
               aws elbv2 modify-listener \
                 --listener-arn "$ALB_LISTENER_ARN" \
@@ -780,7 +766,7 @@ jobs:
                 --default-actions Type=forward,ForwardConfig="{
                   TargetGroups:[
                     {TargetGroupArn='$OLD_TG_ARN',Weight=$OLD_WEIGHT},
-                    {TargetGroupArn=${{ needs.create-new-infrastructure.outputs.new_tg_arn }},Weight=$NEW_WEIGHT}
+                    {TargetGroupArn='$NEW_TG_ARN',Weight=$NEW_WEIGHT}
                   ]
                 }"
             fi
@@ -804,7 +790,7 @@ jobs:
               update_traffic_weights 0 100
               echo " Waiting 3 minutes for traffic to stabilize..."
               sleep 180
-              NEW_HEALTHY_FINAL=$(count_healthy_instances "${{ needs.create-new-infrastructure.outputs.new_tg_arn }}")
+              NEW_HEALTHY_FINAL=$(count_healthy_instances "$NEW_TG_ARN")
               echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
               if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
                 echo " ERROR: Not all instances are healthy before final cutover!"
@@ -831,7 +817,7 @@ jobs:
             sleep 240
             echo "NEW TG = $NEW_TG_ARN"
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
-            NEW_HEALTHY=$(count_healthy_instances "${{ needs.create-new-infrastructure.outputs.new_tg_arn }}")
+            NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
 
             echo "Healthy instances: Old TG=$OLD_HEALTHY, New TG=$NEW_HEALTHY"
 
@@ -850,7 +836,7 @@ jobs:
             echo " Monitoring for 5 minutes..."
             sleep 300
 
-            NEW_HEALTHY_AFTER=$(count_healthy_instances "${{ needs.create-new-infrastructure.outputs.new_tg_arn }}")
+            NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
             OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
 
             echo "Post-monitoring health: Old TG=$OLD_HEALTHY_AFTER, New TG=$NEW_HEALTHY_AFTER"
@@ -878,7 +864,7 @@ jobs:
           echo "  - Old ASG: $(get_asg_capacity "$OLD_ASG_NAME") instances"
           echo "  - New ASG: $(get_asg_capacity "$NEW_ASG_NAME") instances"
           echo "  - Old TG healthy: $(count_healthy_instances "$OLD_TG_ARN")"
-          echo "  - New TG healthy: $(count_healthy_instances "${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
+          echo "  - New TG healthy: $(count_healthy_instances "$NEW_TG_ARN")"
           echo "========================================="
 
       - name: Cleanup Old Infrastructure
