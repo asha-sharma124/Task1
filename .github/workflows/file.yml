@@ -629,7 +629,7 @@ jobs:
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
-          sleep 300
+          sleep 250
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
@@ -835,30 +835,7 @@ jobs:
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$NEW_DESIRED"
             
-            # Wait for new instances to become healthy
-            echo "⏳ Waiting for new instances to become healthy..."
-            RETRY_COUNT=0
-            MAX_RETRIES=20
-            
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-              HEALTHY_COUNT=$(count_healthy_instances "$NEW_TG_ARN")
-              echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$NEW_DESIRED healthy"
-              
-              if [ "$HEALTHY_COUNT" -ge "$NEW_DESIRED" ]; then
-                echo "✅ All new instances are healthy!"
-                break
-              fi
-              
-              sleep 30
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-            done
-            
-            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-              echo "❌ ERROR: New instances did not become healthy in time"
-              echo "Rolling back traffic to old TG..."
-              update_traffic_weights 100 0
-              exit 1
-            fi
+           sleep 200
             
             # Count healthy instances in both target groups
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
