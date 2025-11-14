@@ -383,8 +383,6 @@
 # # - GH_PAT is a GitHub Personal Access Token with repo and admin:repo_hook scopes set as a secret.
 # # - Ensure all required secrets (VPC_ID, LAUNCH_TEMPLATE_ID, DEPLOYMENT_BUCKET, etc.) are defined properly.
 
-
-
 name: Production ASG Progressive Canary Deployment
 
 on:
@@ -442,7 +440,6 @@ jobs:
             docker push $IMAGE_NAME:latest
           done
 
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -463,7 +460,6 @@ jobs:
           aws s3 cp ./nginx-config/quotes.conf s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
 
           echo "Deployment files uploaded to S3"
-
 
       - name: Create new Launch Template version with env setup and deploy
         id: create_lt_version
@@ -534,9 +530,9 @@ jobs:
           echo "App directory created at $APP_DIR" | tee -a $LOG_FILE
 
           echo "Downloading deployment files from S3..." | tee -a $LOG_FILE
-          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION} >> $LOG_FILE 2>&1
-          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION} >> $LOG_FILE 2>&1
-          sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${DEPLOYMENT_TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION} >> $LOG_FILE 2>&1
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/docker-compose.yml $APP_DIR/docker-compose.yml --region ${AWS_REGION} >> $LOG_FILE 2>&1
+          aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/deployment/ $APP_DIR/deployment/ --recursive --region ${AWS_REGION} >> $LOG_FILE 2>&1
+          sudo aws s3 cp s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/quotes.conf /etc/nginx/conf.d/quotes.conf --region ${AWS_REGION} >> $LOG_FILE 2>&1
 
           sudo chown -R ubuntu:ubuntu $APP_DIR
           sudo chmod +x $APP_DIR/deployment/*.sh
@@ -555,7 +551,7 @@ jobs:
           EOF
 
           sed -i "s|\${DEPLOYMENT_BUCKET}|${{ env.DEPLOYMENT_BUCKET }}|g" user-data.sh
-          sed -i "s|\${DEPLOYMENT_TAG}|${TAG}|g" user-data.sh
+          sed -i "s|\${TAG}|${TAG}|g" user-data.sh
           sed -i "s|\${AWS_REGION}|${{ env.AWS_REGION }}|g" user-data.sh
           sed -i "s|\${DOCKER_USERNAME}|${{ secrets.DOCKER_USERNAME }}|g" user-data.sh
           sed -i "s|\${DOCKER_PASSWORD}|${{ secrets.DOCKER_PASSWORD }}|g" user-data.sh
@@ -580,14 +576,12 @@ jobs:
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "Created Launch Template version: $NEW_VERSION"
 
-
-
   create-new-infrastructure:
     needs: build
     runs-on: ubuntu-latest
     outputs:
-      new_asg_name: ${{ steps.create-asg.outputs.asg_name }}
-      new_tg_arn: ${{ steps.create-tg.outputs.tg_arn }}
+      new_asg_name: ${{ steps.create_asg.outputs.asg_name }}
+      new_tg_arn: ${{ steps.create_tg.outputs.tg_arn }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -596,9 +590,8 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-
       - name: Create new Target Group
-        id: create-tg
+        id: create_tg
         run: |
           TG_NAME="tg-${{ github.run_number }}-${{ env.APP_NAME }}"
           TG_ARN=$(aws elbv2 create-target-group \
@@ -616,9 +609,8 @@ jobs:
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
           echo "Created Target Group: $TG_NAME"
 
-
       - name: Create new Auto Scaling Group
-        id: create-asg
+        id: create_asg
         run: |
           ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
           aws autoscaling create-auto-scaling-group \
@@ -627,7 +619,7 @@ jobs:
             --min-size 1 \
             --max-size 5 \
             --desired-capacity 1 \
-            --target-group-arns "${{ steps.create-tg.outputs.tg_arn }}" \
+            --target-group-arns "${{ steps.create_tg.outputs.tg_arn }}" \
             --vpc-zone-identifier "${{ secrets.PRIVATE_SUBNET_IDS }}" \
             --health-check-type ELB \
             --health-check-grace-period 300 \
@@ -636,7 +628,6 @@ jobs:
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
           sleep 230
-
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
@@ -652,7 +643,7 @@ jobs:
                       "Weight": 80
                     },
                     {
-                      "TargetGroupArn": "${{ steps.create-tg.outputs.tg_arn }}",
+                      "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}",
                       "Weight": 20
                     }
                   ],
@@ -665,7 +656,6 @@ jobs:
           echo "Traffic split set to 80% old, 20% new"
           sleep 50
 
-
   qa-approval:
     needs: create-new-infrastructure
     runs-on: ubuntu-latest
@@ -674,19 +664,19 @@ jobs:
     steps:
       - run: |
           echo "QA testing period: 20 mins"
-
-
+          sleep 1200
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
     runs-on: ubuntu-latest
     env:
-          OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}
-          NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
-          OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
-          NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
-          ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
-          MAX_NEW_CAPACITY: 5
+      OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}
+      NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
+      OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
+      NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+      ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
+      MAX_NEW_CAPACITY: 5
+      AWS_REGION: ${{ env.AWS_REGION }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -696,24 +686,18 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Dynamic Traffic Shifting with Loop
-        
         run: |
           #!/bin/bash
           set -e
-          
+
           echo "========================================="
           echo "Starting Dynamic Progressive Deployment"
           echo "========================================="
-          
 
-
-          # Check if this is the first deployment
           if [ -z "$OLD_ASG_NAME" ] || [ "$OLD_ASG_NAME" == "null" ] || [ -z "$OLD_TG_ARN" ] || [ "$OLD_TG_ARN" == "null" ]; then
             echo "First deployment detected - no old infrastructure to migrate from"
             echo "New ASG: $NEW_ASG_NAME"
             echo "Max Capacity: $MAX_NEW_CAPACITY"
-            
-            # Scale new ASG directly to max capacity
             echo "Scaling new ASG to $MAX_NEW_CAPACITY instances..."
             aws autoscaling set-desired-capacity \
               --auto-scaling-group-name "$NEW_ASG_NAME" \
@@ -722,24 +706,20 @@ jobs:
             echo " Waiting for instances to become healthy..."
             sleep 240
 
-            # Point listener to new target group with 100% traffic
             echo "Setting ALB listener to 100% new TG"
             aws elbv2 modify-listener \
               --listener-arn "$ALB_LISTENER_ARN" \
               --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
-            
+
             echo " First deployment completed successfully!"
             exit 0
           fi
-          
-
 
           echo "Old ASG: $OLD_ASG_NAME"
           echo "New ASG: $NEW_ASG_NAME"
           echo "Max Capacity: $MAX_NEW_CAPACITY"
           echo ""
-          
-          # Function to count healthy instances in a target group
+
           count_healthy_instances() {
             local TG_ARN=$1
             if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "null" ]; then
@@ -752,9 +732,6 @@ jobs:
               --output text 2>/dev/null || echo "0"
           }
 
-
-          
-          # Function to get current ASG desired capacity
           get_asg_capacity() {
             local ASG_NAME=$1
             if [ -z "$ASG_NAME" ] || [ "$ASG_NAME" == "null" ]; then
@@ -766,28 +743,20 @@ jobs:
               --query "AutoScalingGroups[0].DesiredCapacity" \
               --output text 2>/dev/null || echo "0"
           }
-          
 
-
-          # Function to update traffic weights
           update_traffic_weights() {
             local OLD_WEIGHT=$1
             local NEW_WEIGHT=$2
-            
             echo "Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
-            
             if [ "$OLD_WEIGHT" -eq 0 ]; then
-              # Switch to 100% new TG
               aws elbv2 modify-listener \
                 --listener-arn "$ALB_LISTENER_ARN" \
                 --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
             elif [ "$NEW_WEIGHT" -eq 0 ]; then
-              # Rollback to 100% old TG
               aws elbv2 modify-listener \
                 --listener-arn "$ALB_LISTENER_ARN" \
                 --default-actions Type=forward,TargetGroupArn="$OLD_TG_ARN"
             else
-              # Weighted distribution
               aws elbv2 modify-listener \
                 --listener-arn "$ALB_LISTENER_ARN" \
                 --default-actions Type=forward,ForwardConfig="{
@@ -798,118 +767,89 @@ jobs:
                 }"
             fi
           }
-          
 
-
-          # Main deployment loop
           ITERATION=1
           while true; do
             echo ""
             echo "========================================="
             echo "📍 Iteration $ITERATION"
             echo "========================================="
-            
-            # Get current capacities
+
             OLD_CAPACITY=$(get_asg_capacity "$OLD_ASG_NAME")
-            
             NEW_CAPACITY=$(get_asg_capacity "$NEW_ASG_NAME")
-            
+
             echo "Current capacities: Old ASG=$OLD_CAPACITY, New ASG=$NEW_CAPACITY"
-            
-            # Check if we've reached max capacity for new ASG
+
             if [ "$NEW_CAPACITY" -ge "$MAX_NEW_CAPACITY" ]; then
               echo " New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
-              
-              # Final traffic shift: 100% to new TG
               echo " Performing final traffic shift to 100% new TG"
               update_traffic_weights 0 100
-              
-              # Wait for traffic to stabilize
               echo " Waiting 3 minutes for traffic to stabilize..."
               sleep 180
-              
-              # Verify health before scaling down old ASG
               NEW_HEALTHY_FINAL=$(count_healthy_instances "$NEW_TG_ARN")
               echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
-              
               if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
                 echo " ERROR: Not all instances are healthy before final cutover!"
                 exit 1
               fi
-              
-              # Scale down old ASG to 0
               echo " Scaling down old ASG to 0..."
               aws autoscaling set-desired-capacity \
                 --auto-scaling-group-name "$OLD_ASG_NAME" \
                 --desired-capacity 0
-              
               echo " Deployment complete!"
               break
             fi
-            
-            # Increment new ASG capacity
+
             NEW_DESIRED=$((NEW_CAPACITY + 1))
             if [ "$NEW_DESIRED" -gt "$MAX_NEW_CAPACITY" ]; then
               NEW_DESIRED=$MAX_NEW_CAPACITY
             fi
-            
+
             echo "Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
             aws autoscaling set-desired-capacity \
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$NEW_DESIRED"
-            
+
             sleep 240
-            
-            # Count healthy instances in both target groups
+
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
-            echo "NEW_TG_ARN='$NEW_TG_ARN'"
             NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
-            
+
             echo "Healthy instances: Old TG=$OLD_HEALTHY, New TG=$NEW_HEALTHY"
-            
-            # Calculate total healthy instances
+
             TOTAL_HEALTHY=$((OLD_HEALTHY + NEW_HEALTHY))
-            
+
             if [ "$TOTAL_HEALTHY" -eq 0 ]; then
               echo "ERROR: No healthy instances available"
               exit 1
             fi
-            
-            # Calculate traffic weights based on healthy instance ratio
+
             NEW_WEIGHT=$((NEW_HEALTHY * 100 / TOTAL_HEALTHY))
             OLD_WEIGHT=$((100 - NEW_WEIGHT))
-            
-            # Update traffic distribution
+
             update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
-            
-            # Monitor period
+
             echo " Monitoring for 5 minutes..."
             sleep 300
-            
-            # Check health after monitoring period
+
             NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
             OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
-            
+
             echo "Post-monitoring health: Old TG=$OLD_HEALTHY_AFTER, New TG=$NEW_HEALTHY_AFTER"
-            
-          
-            
-            # Decrease old ASG capacity proportionally
+
             if [ "$OLD_CAPACITY" -gt 0 ]; then
               OLD_DESIRED=$((OLD_CAPACITY - 1))
               if [ "$OLD_DESIRED" -lt 0 ]; then
                 OLD_DESIRED=0
               fi
-              
               echo " Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
               aws autoscaling set-desired-capacity \
                 --auto-scaling-group-name "$OLD_ASG_NAME" \
                 --desired-capacity "$OLD_DESIRED"
             fi
-            
+
             ITERATION=$((ITERATION + 1))
           done
-          
 
           echo ""
           echo "========================================="
@@ -923,41 +863,32 @@ jobs:
           echo "  - New TG healthy: $(count_healthy_instances "$NEW_TG_ARN")"
           echo "========================================="
 
-
       - name: Cleanup Old Infrastructure
         if: success()
         run: |
           echo "🧹 Cleaning up old infrastructure..."
-          
-          # Check if old infrastructure exists
+
           if [ -z "${{ env.OLD_ASG_NAME }}" ] || [ "${{ env.OLD_ASG_NAME }}" == "null" ]; then
             echo "No old infrastructure to clean up (first deployment)"
             exit 0
           fi
-          
-          # Wait a bit more to ensure traffic has fully migrated
+
           sleep 120
-          
-          # Delete old ASG
+
           echo "Deleting old ASG: ${{ env.OLD_ASG_NAME }}"
           aws autoscaling delete-auto-scaling-group \
             --auto-scaling-group-name "${{ env.OLD_ASG_NAME }}" \
             --force-delete || echo "Old ASG already deleted or doesn't exist"
-          
-          # Wait for ASG deletion to complete
+
           sleep 60
-          
-          # Delete old Target Group
+
           if [ -n "${{ env.OLD_TG_ARN }}" ] && [ "${{ env.OLD_TG_ARN }}" != "null" ]; then
             echo "Deleting old Target Group: ${{ env.OLD_TG_ARN }}"
             aws elbv2 delete-target-group \
               --target-group-arn "${{ env.OLD_TG_ARN }}" || echo "Old TG already deleted or doesn't exist"
           fi
-          
+
           echo " Old infrastructure cleaned up successfully"
-
-
-
 
   update-secrets:
     needs: [create-new-infrastructure, progressive-rollout]
