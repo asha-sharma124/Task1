@@ -1125,3 +1125,13 @@ jobs:
           echo ""
           echo "📊 Image Tag: ${{ needs.build.outputs.image_tag }}"
           echo "✅ All instances running latest code in Blue TG"
+
+
+
+  # if [ "$NEW_HEALTHY_AFTER" -lt "$NEW_HEALTHY" ]; then
+  #             echo " WARNING: Health degraded in new target group!"
+  #             echo "   Before: $NEW_HEALTHY, After: $NEW_HEALTHY_AFTER"
+  #             echo "Rolling back traffic to old TG..."
+  #             update_traffic_weights 100 0
+  #             exit 1
+  #           fi

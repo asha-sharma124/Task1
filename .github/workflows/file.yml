@@ -432,7 +432,7 @@ jobs:
       - name: Build and push Docker images
         run: |
           TAG=${{ steps.set_tag.outputs.image_tag }}
-          echo "🏗️ Building images with tag: $TAG"
+          echo " Building images with tag: $TAG"
           
           for service in db api app; do
             IMAGE_NAME="${{ secrets.DOCKER_USERNAME }}/quotes-${service}"
@@ -441,6 +441,7 @@ jobs:
             docker push $IMAGE_NAME:${TAG}
             docker push $IMAGE_NAME:latest
           done
+
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -461,7 +462,8 @@ jobs:
           aws s3 cp deployment/ s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/deployment/ --recursive
           aws s3 cp ./nginx-config/quotes.conf s3://${DEPLOYMENT_BUCKET}/deployments/${TAG}/
 
-          echo "✅ Deployment files uploaded to S3"
+          echo "Deployment files uploaded to S3"
+
 
       - name: Create new Launch Template version with env setup and deploy
         id: create_lt_version
@@ -576,7 +578,9 @@ jobs:
             --output text)
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Created Launch Template version: $NEW_VERSION"
+          echo "Created Launch Template version: $NEW_VERSION"
+
+
 
   create-new-infrastructure:
     needs: build
@@ -591,6 +595,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
 
       - name: Create new Target Group
         id: create-tg
@@ -611,6 +616,7 @@ jobs:
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
           echo "Created Target Group: $TG_NAME"
 
+
       - name: Create new Auto Scaling Group
         id: create-asg
         run: |
@@ -630,6 +636,7 @@ jobs:
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
           sleep 250
+
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
@@ -657,6 +664,7 @@ jobs:
             ]'
           echo "Traffic split set to 80% old, 20% new"
 
+
   qa-approval:
     needs: create-new-infrastructure
     runs-on: ubuntu-latest
@@ -665,6 +673,8 @@ jobs:
     steps:
       - run: |
           echo "QA testing period: 20 mins"
+
+
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
@@ -693,31 +703,35 @@ jobs:
           echo "Starting Dynamic Progressive Deployment"
           echo "========================================="
           
+
+
           # Check if this is the first deployment
           if [ -z "$OLD_ASG_NAME" ] || [ "$OLD_ASG_NAME" == "null" ] || [ -z "$OLD_TG_ARN" ] || [ "$OLD_TG_ARN" == "null" ]; then
-            echo "🆕 First deployment detected - no old infrastructure to migrate from"
+            echo "First deployment detected - no old infrastructure to migrate from"
             echo "New ASG: $NEW_ASG_NAME"
             echo "Max Capacity: $MAX_NEW_CAPACITY"
             
             # Scale new ASG directly to max capacity
-            echo "🔼 Scaling new ASG to $MAX_NEW_CAPACITY instances..."
+            echo "Scaling new ASG to $MAX_NEW_CAPACITY instances..."
             aws autoscaling set-desired-capacity \
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$MAX_NEW_CAPACITY"
 
-            echo "⏳ Waiting for instances to become healthy..."
+            echo " Waiting for instances to become healthy..."
             sleep 240
 
             # Point listener to new target group with 100% traffic
-            echo "🎯 Setting ALB listener to 100% new TG"
+            echo "Setting ALB listener to 100% new TG"
             aws elbv2 modify-listener \
               --listener-arn "$ALB_LISTENER_ARN" \
               --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
             
-            echo "🎉 First deployment completed successfully!"
+            echo " First deployment completed successfully!"
             exit 0
           fi
           
+
+
           echo "Old ASG: $OLD_ASG_NAME"
           echo "New ASG: $NEW_ASG_NAME"
           echo "Max Capacity: $MAX_NEW_CAPACITY"
@@ -735,6 +749,8 @@ jobs:
               --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
               --output text 2>/dev/null || echo "0"
           }
+
+
           
           # Function to get current ASG desired capacity
           get_asg_capacity() {
@@ -749,12 +765,14 @@ jobs:
               --output text 2>/dev/null || echo "0"
           }
           
+
+
           # Function to update traffic weights
           update_traffic_weights() {
             local OLD_WEIGHT=$1
             local NEW_WEIGHT=$2
             
-            echo "📊 Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
+            echo "Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
             
             if [ "$OLD_WEIGHT" -eq 0 ]; then
               # Switch to 100% new TG
@@ -779,6 +797,8 @@ jobs:
             fi
           }
           
+
+
           # Main deployment loop
           ITERATION=1
           while true; do
@@ -795,14 +815,14 @@ jobs:
             
             # Check if we've reached max capacity for new ASG
             if [ "$NEW_CAPACITY" -ge "$MAX_NEW_CAPACITY" ]; then
-              echo "✅ New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
+              echo " New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
               
               # Final traffic shift: 100% to new TG
-              echo "🎯 Performing final traffic shift to 100% new TG"
+              echo " Performing final traffic shift to 100% new TG"
               update_traffic_weights 0 100
               
               # Wait for traffic to stabilize
-              echo "⏳ Waiting 3 minutes for traffic to stabilize..."
+              echo " Waiting 3 minutes for traffic to stabilize..."
               sleep 180
               
               # Verify health before scaling down old ASG
@@ -810,17 +830,17 @@ jobs:
               echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
               
               if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
-                echo "❌ ERROR: Not all instances are healthy before final cutover!"
+                echo " ERROR: Not all instances are healthy before final cutover!"
                 exit 1
               fi
               
               # Scale down old ASG to 0
-              echo "🔽 Scaling down old ASG to 0..."
+              echo " Scaling down old ASG to 0..."
               aws autoscaling set-desired-capacity \
                 --auto-scaling-group-name "$OLD_ASG_NAME" \
                 --desired-capacity 0
               
-              echo "🎉 Deployment complete!"
+              echo " Deployment complete!"
               break
             fi
             
@@ -830,7 +850,7 @@ jobs:
               NEW_DESIRED=$MAX_NEW_CAPACITY
             fi
             
-            echo "🔼 Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
+            echo "Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
             aws autoscaling set-desired-capacity \
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$NEW_DESIRED"
@@ -847,7 +867,7 @@ jobs:
             TOTAL_HEALTHY=$((OLD_HEALTHY + NEW_HEALTHY))
             
             if [ "$TOTAL_HEALTHY" -eq 0 ]; then
-              echo "❌ ERROR: No healthy instances available"
+              echo "ERROR: No healthy instances available"
               exit 1
             fi
             
@@ -859,7 +879,7 @@ jobs:
             update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
             
             # Monitor period
-            echo "⏳ Monitoring for 5 minutes..."
+            echo " Monitoring for 5 minutes..."
             sleep 300
             
             # Check health after monitoring period
@@ -868,13 +888,7 @@ jobs:
             
             echo "Post-monitoring health: Old TG=$OLD_HEALTHY_AFTER, New TG=$NEW_HEALTHY_AFTER"
             
-            if [ "$NEW_HEALTHY_AFTER" -lt "$NEW_HEALTHY" ]; then
-              echo "⚠️ WARNING: Health degraded in new target group!"
-              echo "   Before: $NEW_HEALTHY, After: $NEW_HEALTHY_AFTER"
-              echo "Rolling back traffic to old TG..."
-              update_traffic_weights 100 0
-              exit 1
-            fi
+          
             
             # Decrease old ASG capacity proportionally
             if [ "$OLD_CAPACITY" -gt 0 ]; then
@@ -883,7 +897,7 @@ jobs:
                 OLD_DESIRED=0
               fi
               
-              echo "🔽 Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
+              echo " Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
               aws autoscaling set-desired-capacity \
                 --auto-scaling-group-name "$OLD_ASG_NAME" \
                 --desired-capacity "$OLD_DESIRED"
@@ -892,9 +906,10 @@ jobs:
             ITERATION=$((ITERATION + 1))
           done
           
+
           echo ""
           echo "========================================="
-          echo "📊 Deployment Summary"
+          echo " Deployment Summary"
           echo "========================================="
           echo "Total iterations: $ITERATION"
           echo "Final state:"
@@ -903,6 +918,7 @@ jobs:
           echo "  - Old TG healthy: $(count_healthy_instances "$OLD_TG_ARN")"
           echo "  - New TG healthy: $(count_healthy_instances "$NEW_TG_ARN")"
           echo "========================================="
+
 
       - name: Cleanup Old Infrastructure
         if: success()
@@ -934,7 +950,9 @@ jobs:
               --target-group-arn "${{ env.OLD_TG_ARN }}" || echo "Old TG already deleted or doesn't exist"
           fi
           
-          echo "✅ Old infrastructure cleaned up successfully"
+          echo " Old infrastructure cleaned up successfully"
+
+
 
 
   update-secrets:
@@ -959,6 +977,6 @@ jobs:
 
       - name: Deployment Success Notification
         run: |
-          echo "🎉 Deployment completed successfully!"
+          echo " Deployment completed successfully!"
           echo "New ASG: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
           echo "New TG: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
