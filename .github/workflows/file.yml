@@ -676,7 +676,7 @@ jobs:
       NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
       ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
       MAX_NEW_CAPACITY: 5
-      AWS_REGION: ${{ env.AWS_REGION }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -774,7 +774,7 @@ jobs:
             echo "========================================="
             echo "📍 Iteration $ITERATION"
             echo "========================================="
-
+            echo "NEW TG = $NEW_TG_ARN"
             OLD_CAPACITY=$(get_asg_capacity "$OLD_ASG_NAME")
             NEW_CAPACITY=$(get_asg_capacity "$NEW_ASG_NAME")
 
@@ -811,7 +811,7 @@ jobs:
               --desired-capacity "$NEW_DESIRED"
 
             sleep 240
-
+            echo "NEW TG = $NEW_TG_ARN"
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
             NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
 
