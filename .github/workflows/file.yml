@@ -1109,8 +1109,7 @@ jobs:
             --query 'LaunchTemplateVersion.VersionNumber' \
             --output text)
 
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Created Launch Template version: $NEW_VERSION"
+          echo "launch_template_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
  
       - name: Create new Target Group
