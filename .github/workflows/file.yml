@@ -667,321 +667,321 @@ jobs:
           echo "QA testing period: 20 mins"
 
   progressive-rollout:
-  needs: [create-new-infrastructure, qa-approval]
-  runs-on: ubuntu-latest
-  steps:
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+    needs: [create-new-infrastructure, qa-approval]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Dynamic Traffic Shifting with Loop
-      env:
-        OLD_ASG_NAME: ${{ env.OLD_ASG_NAME }}
-        NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
-        OLD_TG_ARN: ${{ env.OLD_TG_ARN }}
-        NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
-        ALB_LISTENER_ARN: ${{ env.ALB_LISTENER_ARN }}
-        MAX_NEW_CAPACITY: ${{ env.TOTAL_INSTANCES }}
-      run: |
-        #!/bin/bash
-        set -e
-        
-        echo "========================================="
-        echo "Starting Dynamic Progressive Deployment"
-        echo "========================================="
-        
-        # Check if this is the first deployment
-        if [ -z "$OLD_ASG_NAME" ] || [ "$OLD_ASG_NAME" == "null" ] || [ -z "$OLD_TG_ARN" ] || [ "$OLD_TG_ARN" == "null" ]; then
-          echo "🆕 First deployment detected - no old infrastructure to migrate from"
-          echo "New ASG: $NEW_ASG_NAME"
-          echo "Max Capacity: $MAX_NEW_CAPACITY"
+      - name: Dynamic Traffic Shifting with Loop
+        env:
+          OLD_ASG_NAME: ${{ env.OLD_ASG_NAME }}
+          NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
+          OLD_TG_ARN: ${{ env.OLD_TG_ARN }}
+          NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
+          ALB_LISTENER_ARN: ${{ env.ALB_LISTENER_ARN }}
+          MAX_NEW_CAPACITY: ${{ env.TOTAL_INSTANCES }}
+        run: |
+          #!/bin/bash
+          set -e
           
-          # Scale new ASG directly to max capacity
-          echo "🔼 Scaling new ASG to $MAX_NEW_CAPACITY instances..."
-          aws autoscaling set-desired-capacity \
-            --auto-scaling-group-name "$NEW_ASG_NAME" \
-            --desired-capacity "$MAX_NEW_CAPACITY"
-          
-          # Wait for instances to become healthy
-          echo "⏳ Waiting for instances to become healthy..."
-          RETRY_COUNT=0
-          MAX_RETRIES=30
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            HEALTHY_COUNT=$(aws elbv2 describe-target-health \
-              --target-group-arn "$NEW_TG_ARN" \
-              --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
-              --output text)
-            
-            echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$MAX_NEW_CAPACITY healthy"
-            
-            if [ "$HEALTHY_COUNT" -ge "$MAX_NEW_CAPACITY" ]; then
-              echo "✅ All instances are healthy!"
-              break
-            fi
-            
-            sleep 30
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-          done
-          
-          if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-            echo "❌ ERROR: Instances did not become healthy in time"
-            exit 1
-          fi
-          
-          # Point listener to new target group with 100% traffic
-          echo "🎯 Setting ALB listener to 100% new TG"
-          aws elbv2 modify-listener \
-            --listener-arn "$ALB_LISTENER_ARN" \
-            --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
-          
-          echo "🎉 First deployment completed successfully!"
-          exit 0
-        fi
-        
-        echo "Old ASG: $OLD_ASG_NAME"
-        echo "New ASG: $NEW_ASG_NAME"
-        echo "Max Capacity: $MAX_NEW_CAPACITY"
-        echo ""
-        
-        # Function to count healthy instances in a target group
-        count_healthy_instances() {
-          local TG_ARN=$1
-          if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "null" ]; then
-            echo "0"
-            return
-          fi
-          aws elbv2 describe-target-health \
-            --target-group-arn "$TG_ARN" \
-            --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
-            --output text 2>/dev/null || echo "0"
-        }
-        
-        # Function to get current ASG desired capacity
-        get_asg_capacity() {
-          local ASG_NAME=$1
-          if [ -z "$ASG_NAME" ] || [ "$ASG_NAME" == "null" ]; then
-            echo "0"
-            return
-          fi
-          aws autoscaling describe-auto-scaling-groups \
-            --auto-scaling-group-names "$ASG_NAME" \
-            --query "AutoScalingGroups[0].DesiredCapacity" \
-            --output text 2>/dev/null || echo "0"
-        }
-        
-        # Function to update traffic weights
-        update_traffic_weights() {
-          local OLD_WEIGHT=$1
-          local NEW_WEIGHT=$2
-          
-          echo "📊 Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
-          
-          if [ "$OLD_WEIGHT" -eq 0 ]; then
-            # Switch to 100% new TG
-            aws elbv2 modify-listener \
-              --listener-arn "$ALB_LISTENER_ARN" \
-              --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
-          elif [ "$NEW_WEIGHT" -eq 0 ]; then
-            # Rollback to 100% old TG
-            aws elbv2 modify-listener \
-              --listener-arn "$ALB_LISTENER_ARN" \
-              --default-actions Type=forward,TargetGroupArn="$OLD_TG_ARN"
-          else
-            # Weighted distribution
-            aws elbv2 modify-listener \
-              --listener-arn "$ALB_LISTENER_ARN" \
-              --default-actions Type=forward,ForwardConfig="{
-                TargetGroups:[
-                  {TargetGroupArn='$OLD_TG_ARN',Weight=$OLD_WEIGHT},
-                  {TargetGroupArn='$NEW_TG_ARN',Weight=$NEW_WEIGHT}
-                ]
-              }"
-          fi
-        }
-        
-        # Main deployment loop
-        ITERATION=1
-        while true; do
-          echo ""
           echo "========================================="
-          echo "📍 Iteration $ITERATION"
+          echo "Starting Dynamic Progressive Deployment"
           echo "========================================="
           
-          # Get current capacities
-          OLD_CAPACITY=$(get_asg_capacity "$OLD_ASG_NAME")
-          NEW_CAPACITY=$(get_asg_capacity "$NEW_ASG_NAME")
-          
-          echo "Current capacities: Old ASG=$OLD_CAPACITY, New ASG=$NEW_CAPACITY"
-          
-          # Check if we've reached max capacity for new ASG
-          if [ "$NEW_CAPACITY" -ge "$MAX_NEW_CAPACITY" ]; then
-            echo "✅ New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
+          # Check if this is the first deployment
+          if [ -z "$OLD_ASG_NAME" ] || [ "$OLD_ASG_NAME" == "null" ] || [ -z "$OLD_TG_ARN" ] || [ "$OLD_TG_ARN" == "null" ]; then
+            echo "🆕 First deployment detected - no old infrastructure to migrate from"
+            echo "New ASG: $NEW_ASG_NAME"
+            echo "Max Capacity: $MAX_NEW_CAPACITY"
             
-            # Final traffic shift: 100% to new TG
-            echo "🎯 Performing final traffic shift to 100% new TG"
-            update_traffic_weights 0 100
+            # Scale new ASG directly to max capacity
+            echo "🔼 Scaling new ASG to $MAX_NEW_CAPACITY instances..."
+            aws autoscaling set-desired-capacity \
+              --auto-scaling-group-name "$NEW_ASG_NAME" \
+              --desired-capacity "$MAX_NEW_CAPACITY"
             
-            # Wait for traffic to stabilize
-            echo "⏳ Waiting 3 minutes for traffic to stabilize..."
-            sleep 180
+            # Wait for instances to become healthy
+            echo "⏳ Waiting for instances to become healthy..."
+            RETRY_COUNT=0
+            MAX_RETRIES=30
             
-            # Verify health before scaling down old ASG
-            NEW_HEALTHY_FINAL=$(count_healthy_instances "$NEW_TG_ARN")
-            echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              HEALTHY_COUNT=$(aws elbv2 describe-target-health \
+                --target-group-arn "$NEW_TG_ARN" \
+                --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
+                --output text)
+              
+              echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$MAX_NEW_CAPACITY healthy"
+              
+              if [ "$HEALTHY_COUNT" -ge "$MAX_NEW_CAPACITY" ]; then
+                echo "✅ All instances are healthy!"
+                break
+              fi
+              
+              sleep 30
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            done
             
-            if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
-              echo "❌ ERROR: Not all instances are healthy before final cutover!"
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "❌ ERROR: Instances did not become healthy in time"
               exit 1
             fi
             
-            # Scale down old ASG to 0
-            echo "🔽 Scaling down old ASG to 0..."
-            aws autoscaling set-desired-capacity \
-              --auto-scaling-group-name "$OLD_ASG_NAME" \
-              --desired-capacity 0
+            # Point listener to new target group with 100% traffic
+            echo "🎯 Setting ALB listener to 100% new TG"
+            aws elbv2 modify-listener \
+              --listener-arn "$ALB_LISTENER_ARN" \
+              --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
             
-            echo "🎉 Deployment complete!"
-            break
+            echo "🎉 First deployment completed successfully!"
+            exit 0
           fi
           
-          # Increment new ASG capacity
-          NEW_DESIRED=$((NEW_CAPACITY + 1))
-          if [ "$NEW_DESIRED" -gt "$MAX_NEW_CAPACITY" ]; then
-            NEW_DESIRED=$MAX_NEW_CAPACITY
-          fi
+          echo "Old ASG: $OLD_ASG_NAME"
+          echo "New ASG: $NEW_ASG_NAME"
+          echo "Max Capacity: $MAX_NEW_CAPACITY"
+          echo ""
           
-          echo "🔼 Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
-          aws autoscaling set-desired-capacity \
-            --auto-scaling-group-name "$NEW_ASG_NAME" \
-            --desired-capacity "$NEW_DESIRED"
+          # Function to count healthy instances in a target group
+          count_healthy_instances() {
+            local TG_ARN=$1
+            if [ -z "$TG_ARN" ] || [ "$TG_ARN" == "null" ]; then
+              echo "0"
+              return
+            fi
+            aws elbv2 describe-target-health \
+              --target-group-arn "$TG_ARN" \
+              --query "length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])" \
+              --output text 2>/dev/null || echo "0"
+          }
           
-          # Wait for new instances to become healthy
-          echo "⏳ Waiting for new instances to become healthy..."
-          RETRY_COUNT=0
-          MAX_RETRIES=20
+          # Function to get current ASG desired capacity
+          get_asg_capacity() {
+            local ASG_NAME=$1
+            if [ -z "$ASG_NAME" ] || [ "$ASG_NAME" == "null" ]; then
+              echo "0"
+              return
+            fi
+            aws autoscaling describe-auto-scaling-groups \
+              --auto-scaling-group-names "$ASG_NAME" \
+              --query "AutoScalingGroups[0].DesiredCapacity" \
+              --output text 2>/dev/null || echo "0"
+          }
           
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            HEALTHY_COUNT=$(count_healthy_instances "$NEW_TG_ARN")
-            echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$NEW_DESIRED healthy"
+          # Function to update traffic weights
+          update_traffic_weights() {
+            local OLD_WEIGHT=$1
+            local NEW_WEIGHT=$2
             
-            if [ "$HEALTHY_COUNT" -ge "$NEW_DESIRED" ]; then
-              echo "✅ All new instances are healthy!"
+            echo "📊 Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
+            
+            if [ "$OLD_WEIGHT" -eq 0 ]; then
+              # Switch to 100% new TG
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
+            elif [ "$NEW_WEIGHT" -eq 0 ]; then
+              # Rollback to 100% old TG
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions Type=forward,TargetGroupArn="$OLD_TG_ARN"
+            else
+              # Weighted distribution
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions Type=forward,ForwardConfig="{
+                  TargetGroups:[
+                    {TargetGroupArn='$OLD_TG_ARN',Weight=$OLD_WEIGHT},
+                    {TargetGroupArn='$NEW_TG_ARN',Weight=$NEW_WEIGHT}
+                  ]
+                }"
+            fi
+          }
+          
+          # Main deployment loop
+          ITERATION=1
+          while true; do
+            echo ""
+            echo "========================================="
+            echo "📍 Iteration $ITERATION"
+            echo "========================================="
+            
+            # Get current capacities
+            OLD_CAPACITY=$(get_asg_capacity "$OLD_ASG_NAME")
+            NEW_CAPACITY=$(get_asg_capacity "$NEW_ASG_NAME")
+            
+            echo "Current capacities: Old ASG=$OLD_CAPACITY, New ASG=$NEW_CAPACITY"
+            
+            # Check if we've reached max capacity for new ASG
+            if [ "$NEW_CAPACITY" -ge "$MAX_NEW_CAPACITY" ]; then
+              echo "✅ New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
+              
+              # Final traffic shift: 100% to new TG
+              echo "🎯 Performing final traffic shift to 100% new TG"
+              update_traffic_weights 0 100
+              
+              # Wait for traffic to stabilize
+              echo "⏳ Waiting 3 minutes for traffic to stabilize..."
+              sleep 180
+              
+              # Verify health before scaling down old ASG
+              NEW_HEALTHY_FINAL=$(count_healthy_instances "$NEW_TG_ARN")
+              echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
+              
+              if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
+                echo "❌ ERROR: Not all instances are healthy before final cutover!"
+                exit 1
+              fi
+              
+              # Scale down old ASG to 0
+              echo "🔽 Scaling down old ASG to 0..."
+              aws autoscaling set-desired-capacity \
+                --auto-scaling-group-name "$OLD_ASG_NAME" \
+                --desired-capacity 0
+              
+              echo "🎉 Deployment complete!"
               break
             fi
             
-            sleep 30
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-          done
-          
-          if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-            echo "❌ ERROR: New instances did not become healthy in time"
-            echo "Rolling back traffic to old TG..."
-            update_traffic_weights 100 0
-            exit 1
-          fi
-          
-          # Count healthy instances in both target groups
-          OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
-          NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
-          
-          echo "Healthy instances: Old TG=$OLD_HEALTHY, New TG=$NEW_HEALTHY"
-          
-          # Calculate total healthy instances
-          TOTAL_HEALTHY=$((OLD_HEALTHY + NEW_HEALTHY))
-          
-          if [ "$TOTAL_HEALTHY" -eq 0 ]; then
-            echo "❌ ERROR: No healthy instances available"
-            exit 1
-          fi
-          
-          # Calculate traffic weights based on healthy instance ratio
-          NEW_WEIGHT=$((NEW_HEALTHY * 100 / TOTAL_HEALTHY))
-          OLD_WEIGHT=$((100 - NEW_WEIGHT))
-          
-          # Update traffic distribution
-          update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
-          
-          # Monitor period
-          echo "⏳ Monitoring for 5 minutes..."
-          sleep 300
-          
-          # Check health after monitoring period
-          NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
-          OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
-          
-          echo "Post-monitoring health: Old TG=$OLD_HEALTHY_AFTER, New TG=$NEW_HEALTHY_AFTER"
-          
-          if [ "$NEW_HEALTHY_AFTER" -lt "$NEW_HEALTHY" ]; then
-            echo "⚠️ WARNING: Health degraded in new target group!"
-            echo "   Before: $NEW_HEALTHY, After: $NEW_HEALTHY_AFTER"
-            echo "Rolling back traffic to old TG..."
-            update_traffic_weights 100 0
-            exit 1
-          fi
-          
-          # Decrease old ASG capacity proportionally
-          if [ "$OLD_CAPACITY" -gt 0 ]; then
-            OLD_DESIRED=$((OLD_CAPACITY - 1))
-            if [ "$OLD_DESIRED" -lt 0 ]; then
-              OLD_DESIRED=0
+            # Increment new ASG capacity
+            NEW_DESIRED=$((NEW_CAPACITY + 1))
+            if [ "$NEW_DESIRED" -gt "$MAX_NEW_CAPACITY" ]; then
+              NEW_DESIRED=$MAX_NEW_CAPACITY
             fi
             
-            echo "🔽 Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
+            echo "🔼 Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
             aws autoscaling set-desired-capacity \
-              --auto-scaling-group-name "$OLD_ASG_NAME" \
-              --desired-capacity "$OLD_DESIRED"
+              --auto-scaling-group-name "$NEW_ASG_NAME" \
+              --desired-capacity "$NEW_DESIRED"
+            
+            # Wait for new instances to become healthy
+            echo "⏳ Waiting for new instances to become healthy..."
+            RETRY_COUNT=0
+            MAX_RETRIES=20
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              HEALTHY_COUNT=$(count_healthy_instances "$NEW_TG_ARN")
+              echo "   Health check ($((RETRY_COUNT + 1))/$MAX_RETRIES): $HEALTHY_COUNT/$NEW_DESIRED healthy"
+              
+              if [ "$HEALTHY_COUNT" -ge "$NEW_DESIRED" ]; then
+                echo "✅ All new instances are healthy!"
+                break
+              fi
+              
+              sleep 30
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            done
+            
+            if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+              echo "❌ ERROR: New instances did not become healthy in time"
+              echo "Rolling back traffic to old TG..."
+              update_traffic_weights 100 0
+              exit 1
+            fi
+            
+            # Count healthy instances in both target groups
+            OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
+            NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
+            
+            echo "Healthy instances: Old TG=$OLD_HEALTHY, New TG=$NEW_HEALTHY"
+            
+            # Calculate total healthy instances
+            TOTAL_HEALTHY=$((OLD_HEALTHY + NEW_HEALTHY))
+            
+            if [ "$TOTAL_HEALTHY" -eq 0 ]; then
+              echo "❌ ERROR: No healthy instances available"
+              exit 1
+            fi
+            
+            # Calculate traffic weights based on healthy instance ratio
+            NEW_WEIGHT=$((NEW_HEALTHY * 100 / TOTAL_HEALTHY))
+            OLD_WEIGHT=$((100 - NEW_WEIGHT))
+            
+            # Update traffic distribution
+            update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
+            
+            # Monitor period
+            echo "⏳ Monitoring for 5 minutes..."
+            sleep 300
+            
+            # Check health after monitoring period
+            NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
+            OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
+            
+            echo "Post-monitoring health: Old TG=$OLD_HEALTHY_AFTER, New TG=$NEW_HEALTHY_AFTER"
+            
+            if [ "$NEW_HEALTHY_AFTER" -lt "$NEW_HEALTHY" ]; then
+              echo "⚠️ WARNING: Health degraded in new target group!"
+              echo "   Before: $NEW_HEALTHY, After: $NEW_HEALTHY_AFTER"
+              echo "Rolling back traffic to old TG..."
+              update_traffic_weights 100 0
+              exit 1
+            fi
+            
+            # Decrease old ASG capacity proportionally
+            if [ "$OLD_CAPACITY" -gt 0 ]; then
+              OLD_DESIRED=$((OLD_CAPACITY - 1))
+              if [ "$OLD_DESIRED" -lt 0 ]; then
+                OLD_DESIRED=0
+              fi
+              
+              echo "🔽 Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
+              aws autoscaling set-desired-capacity \
+                --auto-scaling-group-name "$OLD_ASG_NAME" \
+                --desired-capacity "$OLD_DESIRED"
+            fi
+            
+            ITERATION=$((ITERATION + 1))
+          done
+          
+          echo ""
+          echo "========================================="
+          echo "📊 Deployment Summary"
+          echo "========================================="
+          echo "Total iterations: $ITERATION"
+          echo "Final state:"
+          echo "  - Old ASG: $(get_asg_capacity "$OLD_ASG_NAME") instances"
+          echo "  - New ASG: $(get_asg_capacity "$NEW_ASG_NAME") instances"
+          echo "  - Old TG healthy: $(count_healthy_instances "$OLD_TG_ARN")"
+          echo "  - New TG healthy: $(count_healthy_instances "$NEW_TG_ARN")"
+          echo "========================================="
+
+      - name: Cleanup Old Infrastructure
+        if: success()
+        run: |
+          echo "🧹 Cleaning up old infrastructure..."
+          
+          # Check if old infrastructure exists
+          if [ -z "${{ env.OLD_ASG_NAME }}" ] || [ "${{ env.OLD_ASG_NAME }}" == "null" ]; then
+            echo "No old infrastructure to clean up (first deployment)"
+            exit 0
           fi
           
-          ITERATION=$((ITERATION + 1))
-        done
-        
-        echo ""
-        echo "========================================="
-        echo "📊 Deployment Summary"
-        echo "========================================="
-        echo "Total iterations: $ITERATION"
-        echo "Final state:"
-        echo "  - Old ASG: $(get_asg_capacity "$OLD_ASG_NAME") instances"
-        echo "  - New ASG: $(get_asg_capacity "$NEW_ASG_NAME") instances"
-        echo "  - Old TG healthy: $(count_healthy_instances "$OLD_TG_ARN")"
-        echo "  - New TG healthy: $(count_healthy_instances "$NEW_TG_ARN")"
-        echo "========================================="
-
-    - name: Cleanup Old Infrastructure
-      if: success()
-      run: |
-        echo "🧹 Cleaning up old infrastructure..."
-        
-        # Check if old infrastructure exists
-        if [ -z "${{ env.OLD_ASG_NAME }}" ] || [ "${{ env.OLD_ASG_NAME }}" == "null" ]; then
-          echo "No old infrastructure to clean up (first deployment)"
-          exit 0
-        fi
-        
-        # Wait a bit more to ensure traffic has fully migrated
-        sleep 120
-        
-        # Delete old ASG
-        echo "Deleting old ASG: ${{ env.OLD_ASG_NAME }}"
-        aws autoscaling delete-auto-scaling-group \
-          --auto-scaling-group-name "${{ env.OLD_ASG_NAME }}" \
-          --force-delete || echo "Old ASG already deleted or doesn't exist"
-        
-        # Wait for ASG deletion to complete
-        sleep 60
-        
-        # Delete old Target Group
-        if [ -n "${{ env.OLD_TG_ARN }}" ] && [ "${{ env.OLD_TG_ARN }}" != "null" ]; then
-          echo "Deleting old Target Group: ${{ env.OLD_TG_ARN }}"
-          aws elbv2 delete-target-group \
-            --target-group-arn "${{ env.OLD_TG_ARN }}" || echo "Old TG already deleted or doesn't exist"
-        fi
-        
-        echo "✅ Old infrastructure cleaned up successfully"
+          # Wait a bit more to ensure traffic has fully migrated
+          sleep 120
+          
+          # Delete old ASG
+          echo "Deleting old ASG: ${{ env.OLD_ASG_NAME }}"
+          aws autoscaling delete-auto-scaling-group \
+            --auto-scaling-group-name "${{ env.OLD_ASG_NAME }}" \
+            --force-delete || echo "Old ASG already deleted or doesn't exist"
+          
+          # Wait for ASG deletion to complete
+          sleep 60
+          
+          # Delete old Target Group
+          if [ -n "${{ env.OLD_TG_ARN }}" ] && [ "${{ env.OLD_TG_ARN }}" != "null" ]; then
+            echo "Deleting old Target Group: ${{ env.OLD_TG_ARN }}"
+            aws elbv2 delete-target-group \
+              --target-group-arn "${{ env.OLD_TG_ARN }}" || echo "Old TG already deleted or doesn't exist"
+          fi
+          
+          echo "✅ Old infrastructure cleaned up successfully"
 
 
   update-secrets:
