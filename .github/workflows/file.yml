@@ -683,7 +683,7 @@ jobs:
     env:
           OLD_ASG_NAME: ${{ secrets.OLD_ASG_NAME }}
           NEW_ASG_NAME: ${{ needs.create-new-infrastructure.outputs.new_asg_name }}
-          OLD_TG_ARN: ${{ env.OLD_TG_ARN }}
+          OLD_TG_ARN: ${{ secrets.OLD_TG_ARN }}
           NEW_TG_ARN: ${{ needs.create-new-infrastructure.outputs.new_tg_arn }}
           ALB_LISTENER_ARN: ${{ secrets.ALB_LISTENER_ARN }}
           MAX_NEW_CAPACITY: 5
