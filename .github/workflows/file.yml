@@ -1147,7 +1147,7 @@ jobs:
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
-            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green }}
+            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green 
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           sleep 50
       - name: Debug create_tg output
