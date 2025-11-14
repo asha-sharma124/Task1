@@ -671,6 +671,10 @@ jobs:
     steps:
       - run: |
           echo "QA testing period: 20 mins"
+
+          echo "Job Output new_tg_arn: '${{ needs.create-new-infrastructure.outputs.new_tg_arn }}'"
+          echo "Job Output new_asg_name: '${{ needs.create-new-infrastructure.outputs.new_asg_name }}'"
+
          
 
   progressive-rollout:
@@ -690,6 +694,10 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Debug job outputs
+        run: |
+          echo "Job Output new_tg_arn: '${{ needs.create-new-infrastructure.outputs.new_tg_arn }}'"
+          echo "Job Output new_asg_name: '${{ needs.create-new-infrastructure.outputs.new_asg_name }}'"
 
       - name: Dynamic Traffic Shifting with Loop
         run: |
