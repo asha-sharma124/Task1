@@ -1110,7 +1110,7 @@ jobs:
             --output text)
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Created Launch Template version: $NEW_VERSION"
+          echo "✅ Created Launch Template version: $NEW_VERSION"
 
  
       - name: Create new Target Group
@@ -1131,30 +1131,44 @@ jobs:
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
+
       - name: Create new Auto Scaling Group
         id: create_asg
+        env:
+          LAUNCH_TEMPLATE_VERSION: ${{ steps.create_lt_version.outputs.launch_template_version }}
+          TG_ARN: ${{ steps.create_tg.outputs.tg_arn }}
+          IMAGE_TAG: ${{ steps.set_tag.outputs.image_tag }}
+          LAUNCH_TEMPLATE_ID: ${{ env.LAUNCH_TEMPLATE_ID }}
+          PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}
+          APP_NAME: ${{ env.APP_NAME }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
         run: |
-          ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
-          LAUNCH_TEMPLATE_VERSION="${{ steps.create_lt_version.outputs.launch_template_version }}"
-          TG_ARN="${{ steps.create_tg.outputs.tg_arn }}"
-          IMAGE_TAG="${{ steps.set_tag.outputs.image_tag }}"
-          
+          ASG_NAME="asg-${GITHUB_RUN_NUMBER}-${APP_NAME}"
+
           echo "Creating ASG $ASG_NAME with Launch Template Version: $LAUNCH_TEMPLATE_VERSION"
+
+          if [ -z "$LAUNCH_TEMPLATE_VERSION" ]; then
+            echo "ERROR: LAUNCH_TEMPLATE_VERSION is empty"
+            exit 1
+          fi
+
           aws autoscaling create-auto-scaling-group \
             --auto-scaling-group-name "$ASG_NAME" \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=$LAUNCH_TEMPLATE_VERSION \
+            --launch-template LaunchTemplateId=$LAUNCH_TEMPLATE_ID,Version=$LAUNCH_TEMPLATE_VERSION \
             --min-size 1 \
             --max-size 5 \
             --desired-capacity 1 \
             --target-group-arns "$TG_ARN" \
-            --vpc-zone-identifier "${{ secrets.PRIVATE_SUBNET_IDS }}" \
+            --vpc-zone-identifier "$PRIVATE_SUBNET_IDS" \
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value="$IMAGE_TAG"
-          
+
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
+
           sleep 240
+
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
