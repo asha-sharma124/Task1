@@ -606,7 +606,7 @@ jobs:
             --protocol HTTP \
             --port 80 \
             --vpc-id "${{ secrets.VPC_ID }}" \
-            --health-check-path /health \
+            --health-check-path / \
             --health-check-interval-seconds 30 \
             --health-check-timeout-seconds 5 \
             --healthy-threshold-count 2 \
@@ -663,6 +663,7 @@ jobs:
               }
             ]'
           echo "Traffic split set to 80% old, 20% new"
+          sleep 50
 
 
   qa-approval:
@@ -855,7 +856,7 @@ jobs:
               --auto-scaling-group-name "$NEW_ASG_NAME" \
               --desired-capacity "$NEW_DESIRED"
             
-           sleep 200
+           sleep 240
             
             # Count healthy instances in both target groups
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
