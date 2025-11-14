@@ -607,8 +607,12 @@ jobs:
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
 
-          echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-          echo "::set-output name=tg_arn::$TG_ARN"
+          if [ -z "$TG_ARN" ]; then
+          echo "Error: Failed to create Target Group or retrieve ARN."
+          exit 1
+          else
+            echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          fi      
           echo "Created Target Group: tg_arn=$TG_ARN"
           
       - name: Create new Auto Scaling Group
