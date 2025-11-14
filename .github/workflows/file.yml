@@ -626,7 +626,7 @@ jobs:
             --termination-policies "OldestInstance" \
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
-          sleep 230
+          
       - name: Debug create_tg output
         run: echo "TG ARN from step= ${{ steps.create_tg.outputs.tg_arn }}"
 
@@ -655,7 +655,7 @@ jobs:
               }
             ]'
           echo "Traffic split set to 80% old, 20% new"
-          sleep 50
+          
 
   qa-approval:
     needs: create-new-infrastructure
@@ -691,7 +691,7 @@ jobs:
           echo "NEW_TG_ARN=${NEW_TG_ARN}"
           NEW_ASG_NAME="${{ needs.create-new-infrastructure.outputs.new_asg_name }}"
           NEW_TG_ARN="${{ needs.create-new-infrastructure.outputs.new_tg_arn }}"
-          #!/bin/bash
+       
           set -e
         
           echo "========================================="
