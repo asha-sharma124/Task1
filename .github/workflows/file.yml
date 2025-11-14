@@ -1138,7 +1138,7 @@ jobs:
           ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
           aws autoscaling create-auto-scaling-group \
             --auto-scaling-group-name "$ASG_NAME" \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ needs.build.outputs.launch_template_version }} \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ steps.create_lt_version.outputs.launch_template_version }} \
             --min-size 1 \
             --max-size 5 \
             --desired-capacity 1 \
@@ -1147,7 +1147,7 @@ jobs:
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
-            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
+            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           sleep 50
       - name: Debug create_tg output
