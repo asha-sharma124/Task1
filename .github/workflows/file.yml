@@ -1131,25 +1131,29 @@ jobs:
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
 
-
       - name: Create new Auto Scaling Group
         id: create_asg
         run: |
           ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
+          LAUNCH_TEMPLATE_VERSION="${{ steps.create_lt_version.outputs.launch_template_version }}"
+          TG_ARN="${{ steps.create_tg.outputs.tg_arn }}"
+
           aws autoscaling create-auto-scaling-group \
             --auto-scaling-group-name "$ASG_NAME" \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ steps.create_lt_version.outputs.launch_template_version }} \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=$LAUNCH_TEMPLATE_VERSION \
             --min-size 1 \
             --max-size 5 \
             --desired-capacity 1 \
-            --target-group-arns "${{ steps.create_tg.outputs.tg_arn }}" \
+            --target-group-arns "$TG_ARN" \
             --vpc-zone-identifier "${{ secrets.PRIVATE_SUBNET_IDS }}" \
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
-            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green 
+            --tags '[{"Key":"Name","Value":"'"$ASG_NAME"'"},{"Key":"Environment","Value":"green"}]'
+        
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           sleep 50
+
       - name: Debug create_tg output
         run: echo "TG ARN from step= ${{ steps.create_tg.outputs.tg_arn }}"
 
