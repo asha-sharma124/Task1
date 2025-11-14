@@ -607,6 +607,7 @@ jobs:
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
+          echo "tg-new -arn $TG_ARN"
           echo "Created Target Group: $TG_NAME"
 
       - name: Create new Auto Scaling Group
