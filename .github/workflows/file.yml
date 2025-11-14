@@ -542,7 +542,7 @@ jobs:
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
 
       - name: Debug create_tg output
-        run: echo "TG ARN from step: ${{ steps.create_tg.outputs.tg_arn }}"
+        run: echo "TG ARN from step= ${{ steps.create_tg.outputs.tg_arn }}"
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
