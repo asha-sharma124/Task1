@@ -607,7 +607,7 @@ jobs:
             --query 'TargetGroups[0].TargetGroupArn' \
             --output text)
           echo "tg_arn=$TG_ARN" >> $GITHUB_OUTPUT
-
+          echo "Created Target Group: tg_arn=$TG_ARN"
       - name: Create new Auto Scaling Group
         id: create_asg
         run: |
@@ -625,6 +625,8 @@ jobs:
             --termination-policies "OldestInstance" \
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
+          sleep 230
+
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
           aws elbv2 modify-listener \
