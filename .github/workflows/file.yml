@@ -627,8 +627,7 @@ jobs:
             --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ needs.build.outputs.image_tag }}
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
           echo "Created ASG: $ASG_NAME"
-          sleep 230
-
+          sleep 200
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
           aws elbv2 modify-listener \
@@ -664,7 +663,7 @@ jobs:
     steps:
       - run: |
           echo "QA testing period: 20 mins"
-          sleep 1200
+         
 
   progressive-rollout:
     needs: [create-new-infrastructure, qa-approval]
