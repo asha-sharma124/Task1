@@ -1135,19 +1135,26 @@ jobs:
         id: create_asg
         run: |
           ASG_NAME="asg-${{ github.run_number }}-${{ env.APP_NAME }}"
+          LAUNCH_TEMPLATE_VERSION="${{ steps.create_lt_version.outputs.launch_template_version }}"
+          TG_ARN="${{ steps.create_tg.outputs.tg_arn }}"
+          IMAGE_TAG="${{ steps.set_tag.outputs.image_tag }}"
+          
+          echo "Creating ASG $ASG_NAME with Launch Template Version: $LAUNCH_TEMPLATE_VERSION"
           aws autoscaling create-auto-scaling-group \
             --auto-scaling-group-name "$ASG_NAME" \
-            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=${{ steps.create_lt_version.outputs.launch_template_version }} \
+            --launch-template LaunchTemplateId=${{ env.LAUNCH_TEMPLATE_ID }},Version=$LAUNCH_TEMPLATE_VERSION \
             --min-size 1 \
             --max-size 5 \
             --desired-capacity 1 \
-            --target-group-arns "${{ steps.create_tg.outputs.tg_arn }}" \
+            --target-group-arns "$TG_ARN" \
             --vpc-zone-identifier "${{ secrets.PRIVATE_SUBNET_IDS }}" \
             --health-check-type ELB \
             --health-check-grace-period 300 \
             --termination-policies "OldestInstance" \
-            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value=${{ steps.set_tag.outputs.image_tag }}
+            --tags Key=Name,Value="$ASG_NAME" Key=Environment,Value=green Key=DeploymentBatch,Value="$IMAGE_TAG"
+          
           echo "asg_name=$ASG_NAME" >> $GITHUB_OUTPUT
+          sleep 240
 
       - name: Set initial traffic split 80% old TG, 20% new TG
         run: |
