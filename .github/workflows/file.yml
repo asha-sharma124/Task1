@@ -1270,6 +1270,7 @@ jobs:
             echo "Current capacities: Old ASG=$OLD_CAPACITY, New ASG=$NEW_CAPACITY"
 
 
+
             if [ "$NEW_CAPACITY" -ge "$MAX_NEW_CAPACITY" ]; then
               echo " New ASG has reached maximum capacity ($MAX_NEW_CAPACITY)"
               echo " Performing final traffic shift to 100% new TG"
@@ -1282,7 +1283,7 @@ jobs:
                 echo " ERROR: Not all instances are healthy before final cutover!"
                 exit 1
               fi
-              
+
               echo " Scaling down old ASG to 1..."
               aws autoscaling set-desired-capacity --auto-scaling-group-name "$OLD_ASG_NAME" --desired-capacity 1   --region ap-south-1
               echo " Deployment complete!"
