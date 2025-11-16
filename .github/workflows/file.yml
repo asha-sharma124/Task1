@@ -936,7 +936,7 @@ env:
   PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}
   DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
   SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
-  TOTAL_INSTANCES: 5
+  TOTAL_INSTANCES: 4
 
 jobs:
   build:
@@ -1296,7 +1296,7 @@ jobs:
             echo "Scaling new ASG from $NEW_CAPACITY to $NEW_DESIRED instances..."
             aws autoscaling set-desired-capacity --auto-scaling-group-name "$NEW_ASG_NAME" --desired-capacity "$NEW_DESIRED"
 
-            sleep 240
+            sleep 200
             OLD_HEALTHY=$(count_healthy_instances "$OLD_TG_ARN")
             NEW_HEALTHY=$(count_healthy_instances "$NEW_TG_ARN")
 
@@ -1315,7 +1315,7 @@ jobs:
             update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
 
             echo " Monitoring for 5 minutes..."
-            sleep 300
+            sleep 100
 
             NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
             OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
@@ -1324,8 +1324,8 @@ jobs:
 
             if [ "$OLD_CAPACITY" -gt 0 ]; then
               OLD_DESIRED=$((OLD_CAPACITY - 1))
-              if [ "$OLD_DESIRED" -lt 0 ]; then
-                OLD_DESIRED=0
+              if [ "$OLD_DESIRED" -lt 1 ]; then
+                OLD_DESIRED=1
               fi
               echo " Scaling down old ASG from $OLD_CAPACITY to $OLD_DESIRED instances..."
               aws autoscaling set-desired-capacity --auto-scaling-group-name "$OLD_ASG_NAME" --desired-capacity "$OLD_DESIRED"
