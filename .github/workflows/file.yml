@@ -1224,17 +1224,35 @@ jobs:
             local OLD_WEIGHT=$1
             local NEW_WEIGHT=$2
             echo "Updating traffic: Old TG=${OLD_WEIGHT}%, New TG=${NEW_WEIGHT}%"
+            
             if [ "$OLD_WEIGHT" -eq 0 ]; then
-              aws elbv2 modify-listener --listener-arn "$ALB_LISTENER_ARN" --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions Type=forward,TargetGroupArn="$NEW_TG_ARN"
             elif [ "$NEW_WEIGHT" -eq 0 ]; then
-              aws elbv2 modify-listener --listener-arn "$ALB_LISTENER_ARN" --default-actions Type=forward,TargetGroupArn="$OLD_TG_ARN"
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions Type=forward,TargetGroupArn="$OLD_TG_ARN"
             else
-              aws elbv2 modify-listener --listener-arn "$ALB_LISTENER_ARN" --default-actions Type=forward,ForwardConfig="{
-                TargetGroups:[
-                  {TargetGroupArn='$OLD_TG_ARN',Weight=$OLD_WEIGHT},
-                  {TargetGroupArn='$NEW_TG_ARN',Weight=$NEW_WEIGHT}
-                ]
-              }"
+              aws elbv2 modify-listener \
+                --listener-arn "$ALB_LISTENER_ARN" \
+                --default-actions "[
+                  {
+                    \"Type\": \"forward\",
+                    \"ForwardConfig\": {
+                      \"TargetGroups\": [
+                        {
+                          \"TargetGroupArn\": \"$OLD_TG_ARN\",
+                          \"Weight\": $OLD_WEIGHT
+                        },
+                        {
+                          \"TargetGroupArn\": \"$NEW_TG_ARN\",
+                          \"Weight\": $NEW_WEIGHT
+                        }
+                      ]
+                    }
+                  }
+                ]"
             fi
           }
 
