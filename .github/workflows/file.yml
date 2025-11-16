@@ -1282,6 +1282,7 @@ jobs:
                 echo " ERROR: Not all instances are healthy before final cutover!"
                 exit 1
               fi
+              
               echo " Scaling down old ASG to 1..."
               aws autoscaling set-desired-capacity --auto-scaling-group-name "$OLD_ASG_NAME" --desired-capacity 1   --region ap-south-1
               echo " Deployment complete!"
