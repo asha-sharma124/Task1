@@ -936,7 +936,7 @@ env:
   PRIVATE_SUBNET_IDS: ${{ secrets.PRIVATE_SUBNET_IDS }}
   DEPLOYMENT_BUCKET: ${{ secrets.DEPLOYMENT_BUCKET }}
   SECURITY_GROUP_IDS: ${{ secrets.SECURITY_GROUP_IDS }}
-  TOTAL_INSTANCES: 3
+  TOTAL_INSTANCES: 2
 
 jobs:
   build:
@@ -1275,7 +1275,7 @@ jobs:
               echo " Performing final traffic shift to 100% new TG"
               update_traffic_weights 0 100
               echo " Waiting 3 minutes for traffic to stabilize..."
-              sleep 180
+              sleep 100
               NEW_HEALTHY_FINAL=$(count_healthy_instances "$NEW_TG_ARN")
               echo "Final health check: $NEW_HEALTHY_FINAL/$MAX_NEW_CAPACITY healthy in new TG"
               if [ "$NEW_HEALTHY_FINAL" -lt "$MAX_NEW_CAPACITY" ]; then
@@ -1315,7 +1315,7 @@ jobs:
             update_traffic_weights "$OLD_WEIGHT" "$NEW_WEIGHT"
 
             echo " Monitoring for 5 minutes..."
-            sleep 100
+            sleep 30
 
             NEW_HEALTHY_AFTER=$(count_healthy_instances "$NEW_TG_ARN")
             OLD_HEALTHY_AFTER=$(count_healthy_instances "$OLD_TG_ARN")
