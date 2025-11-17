@@ -261,7 +261,41 @@ jobs:
               }
             ]'
           sleep 30
-  
+      - name: Create listener rule for User-Agent header routing to new TG
+        run: |
+          aws elbv2 create-rule \
+            --listener-arn ${{ env.ALB_LISTENER_ARN }} \
+            --priority 10 \
+            --conditions '[
+              {
+                "Field": "http-header",
+                "HttpHeaderConfig": {
+                  "HttpHeaderName": "User-Agent",
+                  "Values": ["newtg"]
+                }
+              }
+            ]' \
+            --actions '[
+              {
+                "Type": "forward",
+                "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}"
+              }
+            ]'
+              {
+                "Field": "http-header",
+                "HttpHeaderConfig": {
+                  "HttpHeaderName": "User-Agent",
+                  "Values": ["newtg"]
+                }
+              }
+            ]' \
+            --actions '[
+              {
+                "Type": "forward",
+                "TargetGroupArn": "${{ steps.create_tg.outputs.tg_arn }}"
+              }
+            ]'
+
   
 
       - name: Dynamic Progressive Rollout
